@@ -77,6 +77,25 @@ SUPPORTED_BODY_TYPES = {
 FIELD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 SECURITY_URL = "https://github.com/mirealo/.github/blob/main/SECURITY.md"
 SUPPORT_URL = "https://github.com/mirealo/.github/blob/main/SUPPORT.md"
+REQUIRED_COMMUNITY_FILES = (
+    Path("README.md"),
+    Path("profile/README.md"),
+    Path("GOVERNANCE.md"),
+    Path("CONTRIBUTING.md"),
+    Path("SECURITY.md"),
+    Path("SUPPORT.md"),
+    Path("CODE_OF_CONDUCT.md"),
+    Path("PULL_REQUEST_TEMPLATE.md"),
+    Path(".github/CODEOWNERS"),
+)
+PLACEHOLDER_PATTERN = re.compile(
+    r"\b(?:TBD|TODO|FIXME|XXX)\b|<<<<<<<|=======|>>>>>>>",
+    re.IGNORECASE,
+)
+MARKDOWN_LINK_PATTERN = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+CODEOWNERS_WILDCARD_PATTERN = re.compile(
+    r"(?m)^\*\s+@\S+(?:\s+@\S+)*\s*$"
+)
 
 
 class GovernanceError(Exception):
@@ -359,6 +378,82 @@ def validate_issue_forms(
     return errors
 
 
+def _tracked_policy_files(root: Path) -> tuple[Path, ...]:
+    paths = list(REQUIRED_COMMUNITY_FILES)
+    yaml_directories = (
+        root / ".github",
+        root / ".github" / "ISSUE_TEMPLATE",
+        root / ".github" / "workflows",
+    )
+    for directory in yaml_directories:
+        for pattern in ("*.yml", "*.yaml"):
+            paths.extend(
+                path.relative_to(root)
+                for path in sorted(directory.glob(pattern))
+                if path.is_file()
+            )
+    script_directory = root / ".github" / "scripts"
+    paths.extend(
+        path.relative_to(root)
+        for path in sorted(script_directory.glob("*.py"))
+        if path.name != "test_governance.py"
+    )
+    return tuple(dict.fromkeys(paths))
+
+
+def _validate_text_file(root: Path, relative: Path) -> list[str]:
+    errors: list[str] = []
+    path = root / relative
+    if not path.is_file():
+        return [f"missing required file: {relative.as_posix()}"]
+    text = path.read_text(encoding="utf-8")
+    if path.suffix != ".py" and PLACEHOLDER_PATTERN.search(text):
+        errors.append(f"{relative}: placeholder or conflict marker")
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line != line.rstrip():
+            errors.append(f"{relative}:{number}: trailing whitespace")
+        if "\t" in line:
+            errors.append(f"{relative}:{number}: tab character")
+    return errors
+
+
+def _validate_markdown_links(root: Path, relative: Path) -> list[str]:
+    errors: list[str] = []
+    path = root / relative
+    if not path.is_file() or path.suffix.lower() != ".md":
+        return errors
+    text = path.read_text(encoding="utf-8")
+    for match in MARKDOWN_LINK_PATTERN.finditer(text):
+        target = match.group(1).strip()
+        if target.startswith(("http://", "https://", "mailto:", "#")):
+            continue
+        clean_target = target.split("#", 1)[0].split("?", 1)[0]
+        if not clean_target:
+            continue
+        resolved = (path.parent / clean_target).resolve()
+        try:
+            resolved.relative_to(root.resolve())
+        except ValueError:
+            errors.append(f"{relative}: link escapes repository: {target}")
+            continue
+        if not resolved.exists():
+            errors.append(f"{relative}: broken internal link: {target}")
+    return errors
+
+
+def validate_community_files(root: Path) -> list[str]:
+    errors: list[str] = []
+    for relative in _tracked_policy_files(root):
+        errors.extend(_validate_text_file(root, relative))
+        errors.extend(_validate_markdown_links(root, relative))
+    codeowners_path = root / ".github" / "CODEOWNERS"
+    if codeowners_path.is_file():
+        codeowners = codeowners_path.read_text(encoding="utf-8")
+        if not CODEOWNERS_WILDCARD_PATTERN.search(codeowners):
+            errors.append(".github/CODEOWNERS: wildcard owner is required")
+    return errors
+
+
 def validate_repository(root: Path) -> list[str]:
     errors: list[str] = []
     try:
@@ -366,4 +461,5 @@ def validate_repository(root: Path) -> list[str]:
     except GovernanceError as error:
         return [str(error)]
     errors.extend(validate_issue_forms(root, labels))
+    errors.extend(validate_community_files(root))
     return errors

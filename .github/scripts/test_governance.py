@@ -15,10 +15,111 @@ from governance import (
     GovernanceError,
     LabelDefinition,
     load_yaml,
+    validate_community_files,
     validate_issue_forms,
     validate_label_manifest,
     validate_repository,
 )
+
+
+class CommunityFileTests(unittest.TestCase):
+    def test_repository_requires_governance_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            required = (
+                "README.md",
+                "profile/README.md",
+                "CONTRIBUTING.md",
+                "SECURITY.md",
+                "SUPPORT.md",
+                "CODE_OF_CONDUCT.md",
+                "PULL_REQUEST_TEMPLATE.md",
+                ".github/CODEOWNERS",
+            )
+            for relative in required:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                contents = (
+                    "* @example\n"
+                    if relative.endswith("CODEOWNERS")
+                    else "# Policy\n"
+                )
+                path.write_text(contents, encoding="utf-8")
+            errors = validate_community_files(root)
+            self.assertEqual(errors, ["missing required file: GOVERNANCE.md"])
+
+    def test_broken_internal_markdown_link_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            required = (
+                "README.md",
+                "GOVERNANCE.md",
+                "CONTRIBUTING.md",
+                "SECURITY.md",
+                "SUPPORT.md",
+                "CODE_OF_CONDUCT.md",
+                "PULL_REQUEST_TEMPLATE.md",
+            )
+            for relative in required:
+                path = root / relative
+                path.write_text("# Policy\n", encoding="utf-8")
+            profile = root / "profile" / "README.md"
+            profile.parent.mkdir()
+            profile.write_text(
+                "# Profile\n\nSee [missing](../MISSING.md).\n",
+                encoding="utf-8",
+            )
+            errors = validate_community_files(root)
+            self.assertTrue(
+                any("broken internal link: ../MISSING.md" in error for error in errors)
+            )
+
+    def test_placeholder_and_conflict_marker_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            required = (
+                "README.md",
+                "GOVERNANCE.md",
+                "CONTRIBUTING.md",
+                "SECURITY.md",
+                "SUPPORT.md",
+                "CODE_OF_CONDUCT.md",
+                "PULL_REQUEST_TEMPLATE.md",
+            )
+            for relative in required:
+                path = root / relative
+                path.write_text("# Policy\n", encoding="utf-8")
+            profile = root / "profile" / "README.md"
+            profile.parent.mkdir()
+            profile.write_text("# Profile\n\nTBD\n<<<<<<< branch\n", encoding="utf-8")
+            errors = validate_community_files(root)
+            self.assertTrue(any("placeholder or conflict marker" in error for error in errors))
+
+    def test_codeowners_requires_an_effective_wildcard_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            required = (
+                "README.md",
+                "GOVERNANCE.md",
+                "CONTRIBUTING.md",
+                "SECURITY.md",
+                "SUPPORT.md",
+                "CODE_OF_CONDUCT.md",
+                "PULL_REQUEST_TEMPLATE.md",
+                "profile/README.md",
+            )
+            for relative in required:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("# Policy\n", encoding="utf-8")
+            codeowners = root / ".github" / "CODEOWNERS"
+            codeowners.parent.mkdir(parents=True, exist_ok=True)
+            codeowners.write_text("/docs/ @example\n", encoding="utf-8")
+            errors = validate_community_files(root)
+            self.assertIn(
+                ".github/CODEOWNERS: wildcard owner is required",
+                errors,
+            )
 
 
 class YamlAdapterTests(unittest.TestCase):
@@ -294,7 +395,8 @@ labels:
 
 class IssueFormTests(unittest.TestCase):
     def test_repository_requires_four_ordered_forms(self) -> None:
-        errors = validate_repository(ROOT)
+        labels = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        errors = validate_issue_forms(ROOT, labels)
         self.assertEqual(errors, [])
 
     def test_unknown_automatic_label_is_rejected(self) -> None:
