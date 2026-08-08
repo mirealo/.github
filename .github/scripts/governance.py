@@ -96,6 +96,45 @@ MARKDOWN_LINK_PATTERN = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 CODEOWNERS_WILDCARD_PATTERN = re.compile(
     r"(?m)^\*\s+@\S+(?:\s+@\S+)*\s*$"
 )
+REQUIRED_POLICY_HEADINGS = {
+    Path("CONTRIBUTING.md"): (
+        "## Before contributing",
+        "## Propose substantial work",
+        "## Validation evidence",
+        "## Pull requests",
+        "## Contribution provenance",
+        "## Review and decisions",
+    ),
+    Path("SECURITY.md"): (
+        "## Supported versions",
+        "## Reporting a vulnerability",
+        "## What to include",
+        "## Safe testing",
+        "## Response process",
+        "## Coordinated disclosure",
+    ),
+    Path("SUPPORT.md"): (
+        "## Issue tracker scope",
+        "## Questions and operational support",
+        "## Unsupported requests",
+        "## Security and sensitive information",
+    ),
+    Path("CODE_OF_CONDUCT.md"): (
+        "## Our standard",
+        "## Unacceptable behavior",
+        "## Reporting concerns",
+        "## Enforcement",
+        "## Scope",
+    ),
+    Path("PULL_REQUEST_TEMPLATE.md"): (
+        "## Summary",
+        "## Linked work",
+        "## Changes",
+        "## Validation evidence",
+        "## Risk and recovery",
+        "## Checklist",
+    ),
+}
 
 
 class GovernanceError(Exception):
@@ -441,6 +480,19 @@ def _validate_markdown_links(root: Path, relative: Path) -> list[str]:
     return errors
 
 
+def _validate_policy_headings(root: Path) -> list[str]:
+    errors: list[str] = []
+    for relative, headings in REQUIRED_POLICY_HEADINGS.items():
+        path = root / relative
+        if not path.is_file():
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for heading in headings:
+            if heading not in lines:
+                errors.append(f"{relative}: missing heading: {heading}")
+    return errors
+
+
 def validate_community_files(root: Path) -> list[str]:
     errors: list[str] = []
     for relative in _tracked_policy_files(root):
@@ -451,6 +503,7 @@ def validate_community_files(root: Path) -> list[str]:
         codeowners = codeowners_path.read_text(encoding="utf-8")
         if not CODEOWNERS_WILDCARD_PATTERN.search(codeowners):
             errors.append(".github/CODEOWNERS: wildcard owner is required")
+    errors.extend(_validate_policy_headings(root))
     return errors
 
 

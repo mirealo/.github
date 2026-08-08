@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 from governance import (
     GovernanceError,
     LabelDefinition,
+    REQUIRED_POLICY_HEADINGS,
     load_yaml,
     validate_community_files,
     validate_issue_forms,
@@ -42,7 +43,11 @@ class CommunityFileTests(unittest.TestCase):
                 contents = (
                     "* @example\n"
                     if relative.endswith("CODEOWNERS")
-                    else "# Policy\n"
+                    else "# Policy\n\n"
+                    + "\n".join(
+                        REQUIRED_POLICY_HEADINGS.get(Path(relative), ())
+                    )
+                    + "\n"
                 )
                 path.write_text(contents, encoding="utf-8")
             errors = validate_community_files(root)
@@ -120,6 +125,15 @@ class CommunityFileTests(unittest.TestCase):
                 ".github/CODEOWNERS: wildcard owner is required",
                 errors,
             )
+
+
+class PolicyStructureTests(unittest.TestCase):
+    def test_repository_policies_have_required_sections(self) -> None:
+        errors = validate_community_files(ROOT)
+        policy_errors = [
+            error for error in errors if "missing heading:" in error
+        ]
+        self.assertEqual(policy_errors, [])
 
 
 class YamlAdapterTests(unittest.TestCase):

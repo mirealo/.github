@@ -2,21 +2,26 @@
 
 <!-- What problem does this change solve, and why is this approach appropriate? -->
 
+## Linked work
+
+<!-- Use "Closes #123" when merging should close an issue. Otherwise link the governing decision. -->
+
 ## Changes
 
-<!-- List the important behavioral or architectural changes. -->
+<!-- List the important behavioral, architectural, policy, or operational changes. -->
 
-## Validation
+## Validation evidence
 
-<!-- Include exact tests, checks, or manual verification performed. -->
+<!-- Include the exact commands, results, and relevant manual verification run against this commit. -->
 
-## Risk and rollout
+## Risk and recovery
 
-<!-- Describe compatibility, security, migration, and rollback considerations. -->
+<!-- Describe compatibility, security, privacy, migration, rollout, and recovery. State "Not applicable" only with a reason. -->
 
 ## Checklist
 
-- [ ] The change is focused and contains no secrets or unrelated files.
-- [ ] Tests and documentation are updated where applicable.
-- [ ] Security and privacy implications have been considered.
-- [ ] All review conversations are resolved.
+- [ ] The change is focused and contains no secrets, sensitive data, or unrelated files.
+- [ ] Tests, documentation, and migration guidance are updated where applicable.
+- [ ] Security, privacy, compatibility, and maintenance implications were evaluated.
+- [ ] Validation evidence reflects the proposed commit.
+- [ ] Every review conversation is resolved before final review.
