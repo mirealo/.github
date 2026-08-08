@@ -1,0 +1,152 @@
+name: Bug report
+description: Report a reproducible defect in a supported Mirealo project.
+title: "[Bug]: "
+labels:
+  - bug
+  - "status: needs-triage"
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Mirealo.
+
+        > [!WARNING]
+        > Do not disclose security vulnerabilities, credentials, personal data,
+        > proprietary information, or unsanitized logs in a public issue. Follow
+        > the [security policy](https://github.com/mirealo/.github/blob/main/SECURITY.md)
+        > and report suspected vulnerabilities through the affected repository's
+        > private reporting flow.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      description: Confirm each item before submitting the report.
+      options:
+        - label: I searched the existing issues and relevant documentation.
+          required: true
+        - label: I identified a currently supported version or an exact affected commit.
+          required: true
+        - label: This report does not describe a suspected security vulnerability.
+          required: true
+        - label: I removed secrets, personal data, proprietary information, and sensitive diagnostics.
+          required: true
+
+  - type: input
+    id: component
+    attributes:
+      label: Affected component
+      description: Identify the package, command, endpoint, screen, or subsystem.
+      placeholder: e.g. CLI authentication, API client, web dashboard
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Affected version or commit
+      description: Provide the release, commit SHA, or build identifier.
+      placeholder: e.g. v1.2.3 or 0123456789abcdef
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: User impact
+      description: Describe observable impact; maintainers will determine priority and severity.
+      options:
+        - Prevents normal use or risks data loss
+        - Makes major functionality unavailable or unreliable
+        - Has limited impact and a workaround exists
+        - Is minor or cosmetic
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Is this a regression?
+      description: Indicate whether the same workflow worked in an earlier supported version.
+      options:
+        - "Yes"
+        - "No"
+        - Unknown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      options:
+        - Always
+        - Often
+        - Sometimes
+        - Once
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: Describe the observable result you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: Actual behavior
+      description: Describe what occurred and how it affected the workflow.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction_steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest deterministic sequence that reproduces the defect.
+      placeholder: |
+        1. Configure ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: minimal_reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Link a minimal repository or include a minimal sample. If unavailable, explain why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include relevant OS, architecture, runtime, browser, dependencies, and sanitized configuration.
+      placeholder: |
+        OS:
+        Architecture:
+        Runtime or browser:
+        Relevant dependencies:
+        Additional configuration:
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or traces
+      description: Remove credentials, tokens, personal data, customer data, and proprietary information.
+      render: shell
+
+  - type: upload
+    id: attachments
+    attributes:
+      label: Sanitized attachments
+      description: Optionally attach screenshots, recordings, or diagnostic files with sensitive data removed.
