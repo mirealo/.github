@@ -2,25 +2,35 @@
 
 ## Issue tracker scope
 
-Use the affected repository's issue forms only for:
+Use the affected repository's forms only for:
 
 - reproducible defects in a supported version or exact commit;
 - focused feature proposals with a concrete user need;
-- actionable documentation corrections.
+- actionable documentation corrections;
+- bounded technical, automation, policy, dependency, or repository maintenance.
 
-Search the repository's documentation and existing issues first, then complete
-every applicable field. Maintainers may close duplicate, incomplete,
-unsupported, or off-topic issues.
+Search the documentation and existing work first, then complete every
+applicable field. Maintainers may close duplicate, incomplete, unsupported,
+unsafe, or off-topic submissions.
 
 ## Questions and operational support
 
 Start with the affected repository's README and documentation. Use a support
-channel explicitly published by that repository, if one exists. Mirealo issue
-trackers are not customer-support channels and do not carry a
-guaranteed response or resolution service-level agreement.
+channel explicitly published by that repository, if one exists.
 
-Do not use Issues for account assistance, access requests, consulting, or
-troubleshooting that cannot be reduced to a reproducible defect.
+Mirealo public issue trackers are engineering work queues, not customer-support
+channels, and carry no guaranteed response or resolution service-level
+agreement.
+
+## Unsupported requests
+
+Do not use public issues for:
+
+- account, billing, access, or credential assistance;
+- consulting, procurement, sales, or partnership requests;
+- general troubleshooting that cannot be reduced to a reproducible defect;
+- disclosure of private products, customer environments, or internal systems;
+- suspected vulnerabilities or conduct reports.
 
 ## Security and sensitive information
 

@@ -7,4 +7,6 @@ contact_links:
       repository. Never disclose a vulnerability in a public issue.
   - name: Support and questions
     url: https://github.com/mirealo/.github/blob/main/SUPPORT.md
-    about: Review the support policy. Issues are reserved for actionable bugs, features, and documentation work.
+    about: >-
+      Review the support policy. Issues are reserved for actionable bugs,
+      features, documentation, and maintenance work.
