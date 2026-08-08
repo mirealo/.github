@@ -26,7 +26,7 @@ body:
           required: true
         - label: This proposal is focused maintenance rather than a support request.
           required: true
-        - label: I removed secrets, personal data, proprietary information, and sensitive diagnostics.
+        - label: I removed secrets, personal data, customer data, proprietary information, and sensitive diagnostics.
           required: true
 
   - type: textarea

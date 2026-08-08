@@ -1418,6 +1418,61 @@ class IssueFormTests(unittest.TestCase):
         errors = validate_issue_forms(ROOT, labels)
         self.assertEqual(errors, [])
 
+    def test_issue_chooser_scope_includes_every_public_form_category(self) -> None:
+        config = load_yaml(ROOT / ".github" / "ISSUE_TEMPLATE" / "config.yml")
+        self.assertIsInstance(config, dict)
+        support_links = [
+            link
+            for link in config.get("contact_links", [])
+            if isinstance(link, dict)
+            and link.get("url")
+            == "https://github.com/mirealo/.github/blob/main/SUPPORT.md"
+        ]
+        self.assertEqual(len(support_links), 1)
+        about = support_links[0].get("about")
+        self.assertIsInstance(about, str)
+        for category in ("bugs", "features", "documentation", "maintenance"):
+            with self.subTest(category=category):
+                self.assertIn(category, about.casefold())
+
+    def test_maintenance_form_requires_complete_privacy_acknowledgement(self) -> None:
+        form = load_yaml(
+            ROOT
+            / ".github"
+            / "ISSUE_TEMPLATE"
+            / "04-maintenance-proposal.yml"
+        )
+        self.assertIsInstance(form, dict)
+        prerequisites = [
+            element
+            for element in form.get("body", [])
+            if isinstance(element, dict) and element.get("id") == "prerequisites"
+        ]
+        self.assertEqual(len(prerequisites), 1)
+        attributes = prerequisites[0].get("attributes")
+        self.assertIsInstance(attributes, dict)
+        options = attributes.get("options")
+        self.assertIsInstance(options, list)
+        acknowledgements = [
+            option.get("label")
+            for option in options
+            if isinstance(option, dict)
+            and option.get("required") is True
+            and isinstance(option.get("label"), str)
+            and option["label"].startswith("I removed ")
+        ]
+        self.assertEqual(len(acknowledgements), 1)
+        acknowledgement = acknowledgements[0].casefold()
+        for category in (
+            "secrets",
+            "personal data",
+            "customer data",
+            "proprietary information",
+            "sensitive diagnostics",
+        ):
+            with self.subTest(category=category):
+                self.assertIn(category, acknowledgement)
+
     def test_unknown_automatic_label_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
