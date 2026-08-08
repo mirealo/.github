@@ -38,6 +38,10 @@ EXPECTED_NAMES_BY_CATEGORY = {
 }
 ALLOWED_CATEGORIES = set(EXPECTED_NAMES_BY_CATEGORY)
 COLOR_PATTERN = re.compile(r"^[0-9a-f]{6}$")
+FULL_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+APPROVED_CHECKOUT_ACTION = (
+    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+)
 EXPECTED_LABEL_COUNT = sum(
     len(names) for names in EXPECTED_NAMES_BY_CATEGORY.values()
 )
@@ -75,6 +79,32 @@ SUPPORTED_BODY_TYPES = {
     "upload",
 }
 FIELD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+YAML_PROFILE_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+YAML_PROFILE_MAPPING_PATTERN = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_.-]*):(?: +(.*))?$"
+)
+YAML_PROFILE_LINE_BREAK_PATTERN = re.compile(r"\r\n|[\r\n]")
+YAML_PROFILE_NONPORTABLE_LINE_CHARACTERS = {
+    "\u0085": "U+0085",
+    "\u2028": "U+2028",
+    "\u2029": "U+2029",
+}
+YAML_PROFILE_RESERVED_KEYS = frozenset({"true", "false", "null"})
+YAML_PROFILE_KEY_ERROR = (
+    "mapping keys must use only ASCII letters, digits, _, ., and -, begin "
+    "with an ASCII letter or _, and not equal true, false, or null"
+)
+YAML_PROFILE_BLOCK_HEADER_PATTERN = re.compile(
+    r"^[|>](?:[+-][1-9]?|[1-9][+-]?)?$"
+)
+YAML_PROFILE_FORBIDDEN_NODE_PREFIXES = {
+    "{": "flow collections are unsupported",
+    "[": "flow collections are unsupported",
+    "&": "anchors are unsupported",
+    "*": "aliases are unsupported",
+    "!": "tags are unsupported",
+    "%": "directives are unsupported",
+}
 SECURITY_URL = "https://github.com/mirealo/.github/blob/main/SECURITY.md"
 SUPPORT_URL = "https://github.com/mirealo/.github/blob/main/SUPPORT.md"
 REQUIRED_COMMUNITY_FILES = (
@@ -135,10 +165,51 @@ REQUIRED_POLICY_HEADINGS = {
         "## Checklist",
     ),
 }
+EXPECTED_WORKFLOW_TRIGGERS = {
+    "pull_request": None,
+    "push": {"branches": ["main"]},
+    "workflow_dispatch": None,
+}
+EXPECTED_CONCURRENCY = {
+    "group": "governance-${{ github.workflow }}-${{ github.ref }}",
+    "cancel-in-progress": True,
+}
+EXPECTED_RUN_SCRIPTS = (
+    "python3 --version\nyq --version",
+    "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v",
+    "python3 .github/scripts/validate_governance.py",
+)
+EXPECTED_STEP_NAMES = (
+    "Check out repository",
+    "Report tool versions",
+    "Run governance unit tests",
+    "Validate governance repository",
+)
+EXPECTED_STEP_KEYS = (
+    {"name", "uses", "with"},
+    {"name", "run"},
+    {"name", "run"},
+    {"name", "run"},
+)
+EXPECTED_DEPENDABOT_UPDATE = {
+    "package-ecosystem": "github-actions",
+    "directory": "/",
+    "schedule": {"interval": "monthly"},
+    "groups": {"github-actions": {"patterns": ["*"]}},
+    "open-pull-requests-limit": 5,
+    "labels": ["dependencies", "status: needs-triage"],
+    "commit-message": {"prefix": "ci"},
+}
 
 
 class GovernanceError(Exception):
     """Raised when a governance artifact violates an invariant."""
+
+
+@dataclass(frozen=True)
+class _YamlProfileNode:
+    empty: bool
+    block_scalar: bool
 
 
 @dataclass(frozen=True)
@@ -184,7 +255,370 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
         ) from error
 
 
+def _yaml_profile_error(path: Path, line_number: int, reason: str) -> None:
+    raise GovernanceError(f"{path}:{line_number}: {reason}")
+
+
+def _strip_yaml_profile_comment(value: str) -> str:
+    for index, character in enumerate(value):
+        if character == "#" and (index == 0 or value[index - 1] == " "):
+            return value[:index].rstrip(" ")
+    return value.rstrip(" ")
+
+
+def _validate_yaml_profile_key(
+    key: str,
+    path: Path,
+    line_number: int,
+) -> None:
+    if (
+        YAML_PROFILE_KEY_PATTERN.fullmatch(key) is None
+        or key.lower() in YAML_PROFILE_RESERVED_KEYS
+    ):
+        _yaml_profile_error(path, line_number, YAML_PROFILE_KEY_ERROR)
+
+
+def _yaml_profile_mapping_entry(content: str) -> tuple[str, str] | None:
+    match = YAML_PROFILE_MAPPING_PATTERN.fullmatch(content.rstrip(" "))
+    if match is None:
+        return None
+    key, value = match.groups()
+    return key, (value or "").lstrip(" ")
+
+
+def _yaml_profile_mapping_separator(value: str) -> int | None:
+    if value.startswith(("\"", "'")):
+        return None
+    value = _strip_yaml_profile_comment(value)
+    for index, character in enumerate(value):
+        if character == ":" and (
+            index + 1 == len(value) or value[index + 1] == " "
+        ):
+            return index
+    return None
+
+
+def _validate_yaml_profile_node(
+    value: str,
+    path: Path,
+    line_number: int,
+) -> _YamlProfileNode:
+    value = value.lstrip(" ")
+    if not value:
+        return _YamlProfileNode(empty=True, block_scalar=False)
+
+    if value[0] in {"\"", "'"}:
+        quote = value[0]
+        index = 1
+        escaped = False
+        while index < len(value):
+            character = value[index]
+            if quote == "\"":
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quote:
+                    break
+            elif character == quote:
+                if index + 1 < len(value) and value[index + 1] == quote:
+                    index += 2
+                    continue
+                break
+            index += 1
+        else:
+            _yaml_profile_error(
+                path,
+                line_number,
+                "multiline quoted scalars are unsupported",
+            )
+
+        tail = value[index + 1 :]
+        if tail and tail[0] != " ":
+            _yaml_profile_error(
+                path,
+                line_number,
+                "content after a quoted scalar is unsupported",
+            )
+        tail = tail.lstrip(" ")
+        if tail and not tail.startswith("#"):
+            _yaml_profile_error(
+                path,
+                line_number,
+                "content after a quoted scalar is unsupported",
+            )
+        return _YamlProfileNode(empty=False, block_scalar=False)
+
+    value = _strip_yaml_profile_comment(value)
+    if not value:
+        return _YamlProfileNode(empty=True, block_scalar=False)
+    if value[0] in YAML_PROFILE_FORBIDDEN_NODE_PREFIXES:
+        _yaml_profile_error(
+            path,
+            line_number,
+            YAML_PROFILE_FORBIDDEN_NODE_PREFIXES[value[0]],
+        )
+    if value[0] in {"|", ">"}:
+        if YAML_PROFILE_BLOCK_HEADER_PATTERN.fullmatch(value) is None:
+            _yaml_profile_error(
+                path,
+                line_number,
+                "invalid block scalar header",
+            )
+        return _YamlProfileNode(empty=False, block_scalar=True)
+    return _YamlProfileNode(empty=False, block_scalar=False)
+
+
+def _require_yaml_profile_container(
+    level_kinds: dict[int, str],
+    indentation: int,
+    kind: str,
+    path: Path,
+    line_number: int,
+) -> None:
+    existing = level_kinds.get(indentation)
+    if existing is not None and existing != kind:
+        _yaml_profile_error(
+            path,
+            line_number,
+            "mapping and sequence entries cannot share one block container",
+        )
+    level_kinds[indentation] = kind
+
+
+def _record_yaml_profile_key(
+    scopes: list[tuple[int, set[str]]],
+    indentation: int,
+    key: str,
+    path: Path,
+    line_number: int,
+    *,
+    new_sequence_item: bool = False,
+) -> None:
+    if new_sequence_item:
+        while scopes and scopes[-1][0] >= indentation:
+            scopes.pop()
+        keys: set[str] = set()
+        scopes.append((indentation, keys))
+    else:
+        while scopes and scopes[-1][0] > indentation:
+            scopes.pop()
+        if scopes and scopes[-1][0] == indentation:
+            keys = scopes[-1][1]
+        else:
+            keys = set()
+            scopes.append((indentation, keys))
+    if key in keys:
+        _yaml_profile_error(
+            path,
+            line_number,
+            f"duplicate YAML mapping key: {key}",
+        )
+    keys.add(key)
+
+
+def _validate_yaml_profile(path: Path) -> None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise GovernanceError(f"{path}: unable to read YAML profile") from error
+    lines = YAML_PROFILE_LINE_BREAK_PATTERN.split(text)
+    scopes: list[tuple[int, set[str]]] = []
+    level_kinds: dict[int, str] = {}
+    previous_indentation: int | None = None
+    permitted_deeper_indentation: set[int] = set()
+    block_scalar_indentation: int | None = None
+
+    for line_number, raw_line in enumerate(lines, start=1):
+        for character, code_point in YAML_PROFILE_NONPORTABLE_LINE_CHARACTERS.items():
+            if character in raw_line:
+                _yaml_profile_error(
+                    path,
+                    line_number,
+                    f"{code_point} is unsupported by the portable YAML profile",
+                )
+        if "\t" in raw_line:
+            _yaml_profile_error(path, line_number, "tabs are unsupported")
+
+        indentation = len(raw_line) - len(raw_line.lstrip(" "))
+        if block_scalar_indentation is not None:
+            if not raw_line.strip(" ") or indentation > block_scalar_indentation:
+                continue
+            block_scalar_indentation = None
+
+        content = raw_line[indentation:]
+        if not content or content.startswith("#"):
+            continue
+        if indentation % 2:
+            _yaml_profile_error(
+                path,
+                line_number,
+                "indentation must use two-space increments",
+            )
+        if previous_indentation is None and indentation != 0:
+            _yaml_profile_error(
+                path,
+                line_number,
+                "the first structural line must not be indented",
+            )
+        if (
+            previous_indentation is not None
+            and indentation > previous_indentation
+            and indentation not in permitted_deeper_indentation
+        ):
+            _yaml_profile_error(
+                path,
+                line_number,
+                "indentation skips an expected structural level",
+            )
+
+        for level in tuple(level_kinds):
+            if level > indentation:
+                del level_kinds[level]
+
+        permitted_next: set[int] = set()
+        is_sequence = content == "-" or content.startswith("- ")
+        if is_sequence:
+            _require_yaml_profile_container(
+                level_kinds,
+                indentation,
+                "sequence",
+                path,
+                line_number,
+            )
+            logical_indentation = indentation + 2
+            while scopes and scopes[-1][0] >= logical_indentation:
+                scopes.pop()
+            item = content[1:].lstrip(" ")
+            if item == "-" or item.startswith("- "):
+                _yaml_profile_error(
+                    path,
+                    line_number,
+                    "compact nested block-sequence syntax is unsupported; "
+                    "put each '-' indicator on its own line",
+                )
+            if item == "?" or item.startswith("? "):
+                _yaml_profile_error(
+                    path,
+                    line_number,
+                    "quoted or complex mapping keys are unsupported",
+                )
+            entry = _yaml_profile_mapping_entry(item)
+            if entry is None:
+                node = _validate_yaml_profile_node(item, path, line_number)
+                separator = _yaml_profile_mapping_separator(item)
+                if separator is not None:
+                    key = item[:separator]
+                    if key == "<<":
+                        _yaml_profile_error(
+                            path,
+                            line_number,
+                            "merge keys are unsupported",
+                        )
+                    _validate_yaml_profile_key(key, path, line_number)
+                    _yaml_profile_error(
+                        path,
+                        line_number,
+                        "unsupported structural YAML syntax",
+                    )
+                if node.empty:
+                    permitted_next.add(logical_indentation)
+                if node.block_scalar:
+                    block_scalar_indentation = indentation
+            else:
+                key, value = entry
+                _validate_yaml_profile_key(key, path, line_number)
+                _require_yaml_profile_container(
+                    level_kinds,
+                    logical_indentation,
+                    "mapping",
+                    path,
+                    line_number,
+                )
+                _record_yaml_profile_key(
+                    scopes,
+                    logical_indentation,
+                    key,
+                    path,
+                    line_number,
+                    new_sequence_item=True,
+                )
+                node = _validate_yaml_profile_node(value, path, line_number)
+                permitted_next.add(logical_indentation)
+                if node.empty:
+                    permitted_next.add(logical_indentation + 2)
+                if node.block_scalar:
+                    block_scalar_indentation = logical_indentation
+        else:
+            if content.startswith(("\"", "'", "?")):
+                _yaml_profile_error(
+                    path,
+                    line_number,
+                    "quoted or complex mapping keys are unsupported",
+                )
+            if content.startswith("<<:"):
+                _yaml_profile_error(
+                    path,
+                    line_number,
+                    "merge keys are unsupported",
+                )
+            if content.startswith("%"):
+                _yaml_profile_error(
+                    path,
+                    line_number,
+                    "directives are unsupported",
+                )
+            if content in {"---", "..."} or content.startswith(
+                ("--- ", "... ")
+            ):
+                _yaml_profile_error(
+                    path,
+                    line_number,
+                    "document markers are unsupported",
+                )
+
+            entry = _yaml_profile_mapping_entry(content)
+            if entry is None:
+                separator = _yaml_profile_mapping_separator(content)
+                if separator is not None:
+                    _validate_yaml_profile_key(
+                        content[:separator],
+                        path,
+                        line_number,
+                    )
+                _yaml_profile_error(
+                    path,
+                    line_number,
+                    "unsupported structural YAML syntax",
+                )
+            key, value = entry
+            _validate_yaml_profile_key(key, path, line_number)
+            _require_yaml_profile_container(
+                level_kinds,
+                indentation,
+                "mapping",
+                path,
+                line_number,
+            )
+            _record_yaml_profile_key(
+                scopes,
+                indentation,
+                key,
+                path,
+                line_number,
+            )
+            node = _validate_yaml_profile_node(value, path, line_number)
+            if node.empty:
+                permitted_next.add(indentation + 2)
+            if node.block_scalar:
+                block_scalar_indentation = indentation
+
+        previous_indentation = indentation
+        permitted_deeper_indentation = permitted_next
+
+
 def load_yaml(path: Path) -> object:
+    _validate_yaml_profile(path)
     version_result = _run(["yq", "--version"])
     version = f"{version_result.stdout}\n{version_result.stderr}".lower()
     if "mikefarah" in version or "version v4" in version:
@@ -417,6 +851,185 @@ def validate_issue_forms(
     return errors
 
 
+def validate_automation(
+    root: Path,
+    labels: tuple[LabelDefinition, ...],
+) -> list[str]:
+    errors: list[str] = []
+    workflow_path = root / ".github" / "workflows" / "governance.yml"
+    dependabot_path = root / ".github" / "dependabot.yml"
+    workflow_files = sorted(
+        {
+            path.name
+            for pattern in ("*.yml", "*.yaml")
+            for path in workflow_path.parent.glob(pattern)
+            if path.is_file()
+        }
+    )
+    if workflow_files != ["governance.yml"]:
+        errors.append(
+            f"{workflow_path.parent}: workflow files must equal "
+            "['governance.yml']"
+        )
+    missing_errors: list[str] = []
+    for path in (workflow_path, dependabot_path):
+        if not path.is_file():
+            missing_errors.append(
+                f"missing required file: {path.relative_to(root)}"
+            )
+    errors.extend(missing_errors)
+    if missing_errors:
+        return errors
+
+    try:
+        workflow = load_yaml(workflow_path)
+    except GovernanceError as error:
+        return [str(error)]
+    if not isinstance(workflow, dict):
+        return [f"{workflow_path}: top level must be a mapping"]
+    if set(workflow) != {"name", "on", "permissions", "concurrency", "jobs"}:
+        errors.append(f"{workflow_path}: top-level keys must equal the approved set")
+    if workflow.get("name") != "Governance":
+        errors.append(f"{workflow_path}: workflow name must be Governance")
+    triggers = workflow.get("on")
+    if not isinstance(triggers, dict) or triggers != EXPECTED_WORKFLOW_TRIGGERS:
+        errors.append(f"{workflow_path}: triggers must equal the approved set")
+    if isinstance(triggers, dict) and "pull_request_target" in triggers:
+        errors.append(f"{workflow_path}: pull_request_target is forbidden")
+    if workflow.get("permissions") != {"contents": "read"}:
+        errors.append(f"{workflow_path}: permissions must be exactly contents: read")
+    if workflow.get("concurrency") != EXPECTED_CONCURRENCY:
+        errors.append(f"{workflow_path}: concurrency must equal the approved policy")
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict) or set(jobs) != {"validate"}:
+        errors.append(f"{workflow_path}: jobs must contain only validate")
+    job = jobs.get("validate") if isinstance(jobs, dict) else None
+    if not isinstance(job, dict):
+        errors.append(f"{workflow_path}: jobs.validate must be a mapping")
+    else:
+        if set(job) != {"name", "runs-on", "timeout-minutes", "steps"}:
+            errors.append(
+                f"{workflow_path}: validate job keys must equal the approved set"
+            )
+        if job.get("name") != "Governance validation":
+            errors.append(f"{workflow_path}: job name must be Governance validation")
+        if job.get("runs-on") != "ubuntu-24.04":
+            errors.append(f"{workflow_path}: runner must be ubuntu-24.04")
+        if job.get("timeout-minutes") != 5:
+            errors.append(f"{workflow_path}: timeout-minutes must equal 5")
+        if "permissions" in job:
+            errors.append(f"{workflow_path}: job-level permissions are forbidden")
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            errors.append(f"{workflow_path}: steps must be a list")
+        else:
+            if (
+                len(steps) != 4
+                or not all(isinstance(step, dict) for step in steps)
+            ):
+                errors.append(f"{workflow_path}: exactly four mapping steps are required")
+            else:
+                if tuple(step.get("name") for step in steps) != EXPECTED_STEP_NAMES:
+                    errors.append(
+                        f"{workflow_path}: step names must equal the approved sequence"
+                    )
+                if tuple(set(step) for step in steps) != EXPECTED_STEP_KEYS:
+                    errors.append(
+                        f"{workflow_path}: step keys must equal the approved sequence"
+                    )
+            action_steps = [
+                step
+                for step in steps
+                if isinstance(step, dict) and "uses" in step
+            ]
+            if len(action_steps) != 1:
+                errors.append(
+                    f"{workflow_path}: exactly one action step is required"
+                )
+            for action_step in action_steps:
+                action_reference = action_step.get("uses")
+                if not isinstance(action_reference, str):
+                    errors.append(
+                        f"{workflow_path}: action reference must be a string"
+                    )
+                    continue
+                repository, separator, reference = action_reference.partition("@")
+                if repository != "actions/checkout":
+                    errors.append(
+                        f"{workflow_path}: unapproved action: {repository}"
+                    )
+                if not separator or not FULL_SHA_PATTERN.fullmatch(reference):
+                    errors.append(
+                        f"{workflow_path}: action reference must use a full SHA: "
+                        f"{action_reference}"
+                    )
+                elif action_reference != APPROVED_CHECKOUT_ACTION:
+                    errors.append(
+                        f"{workflow_path}: action reference must equal the "
+                        "approved checkout reference"
+                    )
+            checkout_steps = [
+                step
+                for step in steps
+                if isinstance(step, dict)
+                and isinstance(step.get("uses"), str)
+                and step["uses"].startswith("actions/checkout@")
+            ]
+            if len(checkout_steps) != 1:
+                errors.append(
+                    f"{workflow_path}: one checkout action must appear"
+                )
+            else:
+                checkout_with = checkout_steps[0].get("with")
+                if (
+                    not isinstance(checkout_with, dict)
+                    or checkout_with != {"persist-credentials": False}
+                ):
+                    errors.append(
+                        f"{workflow_path}: checkout must only disable "
+                        "credential persistence"
+                    )
+            run_scripts = tuple(
+                run_script.strip()
+                for step in steps
+                if isinstance(step, dict)
+                and isinstance((run_script := step.get("run")), str)
+            )
+            if run_scripts != EXPECTED_RUN_SCRIPTS:
+                errors.append(
+                    f"{workflow_path}: run scripts must equal the approved commands"
+                )
+            for step in steps:
+                if isinstance(step, dict):
+                    run_script = step.get("run")
+                    if isinstance(run_script, str) and "${{" in run_script:
+                        errors.append(f"{workflow_path}: GitHub expression in run script")
+
+    try:
+        dependabot = load_yaml(dependabot_path)
+    except GovernanceError as error:
+        errors.append(str(error))
+        return errors
+    if not isinstance(dependabot, dict):
+        errors.append(f"{dependabot_path}: top level must be a mapping")
+    elif set(dependabot) != {"version", "updates"}:
+        errors.append(f"{dependabot_path}: top-level keys must be version and updates")
+    elif dependabot.get("version") != 2:
+        errors.append(f"{dependabot_path}: version must equal 2")
+    elif dependabot.get("updates") != [EXPECTED_DEPENDABOT_UPDATE]:
+        errors.append(
+            f"{dependabot_path}: configuration must equal the approved "
+            "GitHub Actions policy"
+        )
+    else:
+        known_labels = {label.name for label in labels}
+        for label in EXPECTED_DEPENDABOT_UPDATE["labels"]:
+            if label not in known_labels:
+                errors.append(f"{dependabot_path}: unknown label: {label}")
+
+    return errors
+
+
 def _tracked_policy_files(root: Path) -> tuple[Path, ...]:
     paths = list(REQUIRED_COMMUNITY_FILES)
     yaml_directories = (
@@ -514,5 +1127,6 @@ def validate_repository(root: Path) -> list[str]:
     except GovernanceError as error:
         return [str(error)]
     errors.extend(validate_issue_forms(root, labels))
+    errors.extend(validate_automation(root, labels))
     errors.extend(validate_community_files(root))
     return errors

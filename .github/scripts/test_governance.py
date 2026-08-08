@@ -19,6 +19,7 @@ from governance import (
     validate_community_files,
     validate_issue_forms,
     validate_label_manifest,
+    validate_automation,
     validate_repository,
 )
 
@@ -195,6 +196,850 @@ class YamlAdapterTests(unittest.TestCase):
                     GovernanceError, "did not produce valid JSON"
                 ):
                     load_yaml(path)
+
+    def test_load_yaml_rejects_duplicate_workflow_trigger(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "governance.yml"
+            path.write_text(
+                """
+name: Governance
+on:
+  pull_request:
+on:
+  workflow_dispatch:
+""".lstrip(),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(GovernanceError, "duplicate YAML mapping key: on"):
+                load_yaml(path)
+
+    def test_load_yaml_rejects_duplicate_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "governance.yml"
+            path.write_text(
+                """
+permissions:
+  contents: read
+permissions:
+  contents: write
+""".lstrip(),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                GovernanceError,
+                "duplicate YAML mapping key: permissions",
+            ):
+                load_yaml(path)
+
+    def test_load_yaml_rejects_duplicate_key_after_plain_apostrophe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "governance.yml"
+            path.write_text(
+                "owner: maintainer's team\npermissions: write\npermissions: read\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                GovernanceError,
+                "duplicate YAML mapping key: permissions",
+            ):
+                load_yaml(path)
+
+    def test_load_yaml_rejects_duplicate_checkout_mapping_keys(self) -> None:
+        fixtures = {
+            "with": """
+steps:
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    with:
+      persist-credentials: false
+    with:
+      persist-credentials: true
+""".lstrip(),
+            "persist-credentials": """
+steps:
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    with:
+      persist-credentials: false
+      persist-credentials: true
+""".lstrip(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for key, contents in fixtures.items():
+                with self.subTest(key=key):
+                    path = Path(directory) / f"{key}.yml"
+                    path.write_text(contents, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        GovernanceError,
+                        f"duplicate YAML mapping key: {key}",
+                    ):
+                        load_yaml(path)
+
+    def test_load_yaml_allows_block_scalar_content_and_existing_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(
+                """
+run: |
+  on:
+  permissions:
+  with:
+    persist-credentials: true
+""".lstrip(),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                load_yaml(path),
+                {
+                    "run": "on:\npermissions:\nwith:\n  persist-credentials: true\n",
+                },
+            )
+        self.assertIsInstance(
+            load_yaml(ROOT / ".github" / "workflows" / "governance.yml"),
+            dict,
+        )
+
+    def test_load_yaml_allows_block_scalar_header_forms_and_bodies(self) -> None:
+        fixtures = {
+            "literal": ("|", "duplicate:\nduplicate:\n", ""),
+            "folded": (">", "duplicate: duplicate:\n", ""),
+            "strip": ("|-", "duplicate:\nduplicate:", ""),
+            "keep": (">+", "duplicate: duplicate:\n\n", "\n"),
+            "indent": ("|2", "duplicate:\nduplicate:\n", ""),
+            "indent-strip": (">2-", "duplicate: duplicate:", ""),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for name, (header, expected, trailing) in fixtures.items():
+                with self.subTest(header=header):
+                    path = Path(directory) / f"{name}.yml"
+                    path.write_text(
+                        (
+                            f"value: {header}\n"
+                            "  duplicate:\n"
+                            "  duplicate:\n"
+                            f"{trailing}"
+                        ),
+                        encoding="utf-8",
+                    )
+                    self.assertEqual(load_yaml(path), {"value": expected})
+
+    def assert_yaml_profile_error(
+        self,
+        contents: str,
+        line: int,
+        reason: str,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(contents, encoding="utf-8")
+            with self.assertRaises(GovernanceError) as caught:
+                load_yaml(path)
+            message = str(caught.exception)
+            self.assertIn(f"{path}:{line}:", message)
+            self.assertIn(reason, message)
+
+    def test_load_yaml_rejects_duplicate_key_after_plain_colon_apostrophe(
+        self,
+    ) -> None:
+        self.assert_yaml_profile_error(
+            "owner: maintainer:'s-team\n"
+            "permissions: write\n"
+            "permissions: read\n",
+            3,
+            "duplicate YAML mapping key: permissions",
+        )
+
+    def test_yaml_profile_allows_same_keys_in_distinct_sequence_items(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(
+                "items:\n"
+                "  - name: first\n"
+                "    permissions: write\n"
+                "  - name: second\n"
+                "    permissions: read\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                load_yaml(path),
+                {
+                    "items": [
+                        {"name": "first", "permissions": "write"},
+                        {"name": "second", "permissions": "read"},
+                    ]
+                },
+            )
+
+    def test_yaml_profile_preserves_supported_scalar_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(
+                "owner: maintainer:'s-team\n"
+                "url: https://github.com/mirealo/.github/issues?q=is%3Aopen\n"
+                "concurrency: governance-${{ github.workflow }}-${{ github.ref }}\n"
+                'quoted: "{literal: [value]}"\n'
+                'markdown: "[link](https://example.com)"\n'
+                "single: 'maintainer''s # team'\n"
+                "note: value # real comment\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                load_yaml(path),
+                {
+                    "owner": "maintainer:'s-team",
+                    "url": "https://github.com/mirealo/.github/issues?q=is%3Aopen",
+                    "concurrency": (
+                        "governance-${{ github.workflow }}-${{ github.ref }}"
+                    ),
+                    "quoted": "{literal: [value]}",
+                    "markdown": "[link](https://example.com)",
+                    "single": "maintainer's # team",
+                    "note": "value",
+                },
+            )
+
+    def test_yaml_profile_rejects_every_unsupported_syntax_family(self) -> None:
+        fixtures = {
+            "flow mapping": (
+                "value: {one: 1}\n",
+                1,
+                "flow collections are unsupported",
+            ),
+            "flow sequence": (
+                "value: [one, two]\n",
+                1,
+                "flow collections are unsupported",
+            ),
+            "multiline double quote": (
+                'value: "first\n  second"\n',
+                1,
+                "multiline quoted scalars are unsupported",
+            ),
+            "multiline single quote": (
+                "value: 'first\n  second'\n",
+                1,
+                "multiline quoted scalars are unsupported",
+            ),
+            "quoted key": (
+                '"name": value\n',
+                1,
+                "quoted or complex mapping keys are unsupported",
+            ),
+            "complex key": (
+                "? name\n: value\n",
+                1,
+                "quoted or complex mapping keys are unsupported",
+            ),
+            "merge key": (
+                "item:\n  <<: inherited\n",
+                2,
+                "merge keys are unsupported",
+            ),
+            "anchor": (
+                "value: &shared one\n",
+                1,
+                "anchors are unsupported",
+            ),
+            "alias": (
+                "value: *shared\n",
+                1,
+                "aliases are unsupported",
+            ),
+            "tag": (
+                "value: !custom one\n",
+                1,
+                "tags are unsupported",
+            ),
+            "directive": (
+                "%YAML 1.2\nname: value\n",
+                1,
+                "directives are unsupported",
+            ),
+            "document start": (
+                "---\nname: value\n",
+                1,
+                "document markers are unsupported",
+            ),
+            "document end": (
+                "name: value\n...\n",
+                2,
+                "document markers are unsupported",
+            ),
+            "tab": (
+                "root:\n\tchild: value\n",
+                2,
+                "tabs are unsupported",
+            ),
+            "odd indentation": (
+                "root:\n   child: value\n",
+                2,
+                "indentation must use two-space increments",
+            ),
+            "skipped indentation": (
+                "root:\n    child: value\n",
+                2,
+                "indentation skips an expected structural level",
+            ),
+            "invalid block header": (
+                "value: |0\n  content\n",
+                1,
+                "invalid block scalar header",
+            ),
+        }
+        for name, (contents, line, reason) in fixtures.items():
+            with self.subTest(name=name):
+                self.assert_yaml_profile_error(contents, line, reason)
+
+    def test_yaml_profile_rejects_before_invoking_yq(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text("value: {one: 1}\n", encoding="utf-8")
+            with patch("governance.subprocess.run") as run:
+                with self.assertRaisesRegex(
+                    GovernanceError,
+                    "flow collections are unsupported",
+                ):
+                    load_yaml(path)
+            run.assert_not_called()
+
+    def test_yaml_profile_rejects_inline_sequence_merge_before_invoking_yq(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(
+                "items:\n  - <<: inherited\n",
+                encoding="utf-8",
+            )
+            responses = [
+                subprocess.CompletedProcess(
+                    ["yq", "--version"], 0, "yq 3.4.3\n", ""
+                ),
+                subprocess.CompletedProcess(
+                    ["yq", ".", str(path)],
+                    0,
+                    '{"items":[{"<<":"inherited"}]}\n',
+                    "",
+                ),
+            ]
+            with patch("governance.subprocess.run", side_effect=responses) as run:
+                with self.assertRaises(GovernanceError) as caught:
+                    load_yaml(path)
+            message = str(caught.exception)
+            self.assertIn(f"{path}:2:", message)
+            self.assertIn("merge keys are unsupported", message)
+            run.assert_not_called()
+
+    def test_yaml_profile_rejects_inline_sequence_complex_key_before_invoking_yq(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(
+                "items:\n  - ? name\n",
+                encoding="utf-8",
+            )
+            responses = [
+                subprocess.CompletedProcess(
+                    ["yq", "--version"], 0, "yq 3.4.3\n", ""
+                ),
+                subprocess.CompletedProcess(
+                    ["yq", ".", str(path)],
+                    0,
+                    '{"items":[{"name":null}]}\n',
+                    "",
+                ),
+            ]
+            with patch("governance.subprocess.run", side_effect=responses) as run:
+                with self.assertRaises(GovernanceError) as caught:
+                    load_yaml(path)
+            message = str(caught.exception)
+            self.assertIn(f"{path}:2:", message)
+            self.assertIn(
+                "quoted or complex mapping keys are unsupported",
+                message,
+            )
+            run.assert_not_called()
+
+    def test_yaml_profile_allows_plain_sequence_scalar_starting_with_question_mark(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(
+                "items:\n  - ?name\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(load_yaml(path), {"items": ["?name"]})
+
+    def test_yaml_profile_rejects_unsupported_inline_sequence_mapping_keys_before_yq(
+        self,
+    ) -> None:
+        fixtures = {
+            "space": (
+                "bad key",
+                '{"items":[{"bad key":"value"}]}\n',
+            ),
+            "slash": (
+                "bad/key",
+                '{"items":[{"bad/key":"value"}]}\n',
+            ),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for name, (key, yq_output) in fixtures.items():
+                with self.subTest(name=name):
+                    path = Path(directory) / f"{name}.yml"
+                    path.write_text(
+                        f"items:\n  - {key}: value\n",
+                        encoding="utf-8",
+                    )
+                    responses = [
+                        subprocess.CompletedProcess(
+                            ["yq", "--version"], 0, "yq 3.4.3\n", ""
+                        ),
+                        subprocess.CompletedProcess(
+                            ["yq", ".", str(path)],
+                            0,
+                            yq_output,
+                            "",
+                        ),
+                    ]
+                    with patch(
+                        "governance.subprocess.run",
+                        side_effect=responses,
+                    ) as run:
+                        with self.assertRaises(GovernanceError) as caught:
+                            load_yaml(path)
+                    message = str(caught.exception)
+                    self.assertIn(f"{path}:2:", message)
+                    self.assertIn(
+                        "mapping keys must use only ASCII letters, digits, "
+                        "_, ., and -",
+                        message,
+                    )
+                    run.assert_not_called()
+
+    def test_yaml_profile_rejects_compact_nested_sequences_before_yq(
+        self,
+    ) -> None:
+        fixtures = {
+            "flow mapping": ("{}", '{"items":[[{}]]}\n'),
+            "flow sequence": (
+                "[one, two]",
+                '{"items":[[["one","two"]]]}\n',
+            ),
+            "tagged scalar": ("!!str one", '{"items":[["one"]]}\n'),
+        }
+        reason = (
+            "compact nested block-sequence syntax is unsupported; "
+            "put each '-' indicator on its own line"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for name, (item, yq_output) in fixtures.items():
+                with self.subTest(name=name):
+                    path = Path(directory) / f"{name.replace(' ', '-')}.yml"
+                    path.write_text(
+                        f"items:\n  - - {item}\n",
+                        encoding="utf-8",
+                    )
+                    responses = [
+                        subprocess.CompletedProcess(
+                            ["yq", "--version"], 0, "yq 3.4.3\n", ""
+                        ),
+                        subprocess.CompletedProcess(
+                            ["yq", ".", str(path)],
+                            0,
+                            yq_output,
+                            "",
+                        ),
+                    ]
+                    with patch(
+                        "governance.subprocess.run",
+                        side_effect=responses,
+                    ) as run:
+                        with self.assertRaises(GovernanceError) as caught:
+                            load_yaml(path)
+                    self.assertEqual(
+                        str(caught.exception),
+                        f"{path}:2: {reason}",
+                    )
+                    run.assert_not_called()
+
+    def test_yaml_profile_allows_expanded_nested_sequence_syntax(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(
+                "items:\n  -\n    - one\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(load_yaml(path), {"items": [["one"]]})
+
+    def test_yaml_profile_allows_negative_integer_sequence_scalar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(
+                "items:\n  - -1\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(load_yaml(path), {"items": [-1]})
+
+    def test_yaml_profile_allows_merge_like_plain_sequence_scalar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "document.yml"
+            path.write_text(
+                "items:\n  - <<:literal\n",
+                encoding="utf-8",
+            )
+            try:
+                actual = load_yaml(path)
+            except GovernanceError as error:
+                self.fail(f"unexpected GovernanceError: {error}")
+            self.assertEqual(actual, {"items": ["<<:literal"]})
+
+    def test_yaml_profile_rejects_implicit_scalar_mapping_keys_before_yq(
+        self,
+    ) -> None:
+        key_reason = (
+            "mapping keys must use only ASCII letters, digits, _, ., and -, "
+            "begin with an ASCII letter or _, and not equal true, false, or null"
+        )
+        fixtures = (
+            ("top-level digit", "1key: value\n", 1),
+            ("top-level hyphen", "-key: value\n", 1),
+            ("top-level dot", ".key: value\n", 1),
+            ("nested digit", "root:\n  1key: value\n", 2),
+            ("nested hyphen", "root:\n  -key: value\n", 2),
+            ("nested dot", "root:\n  .key: value\n", 2),
+            ("inline digit", "items:\n  - 1key: value\n", 2),
+            ("inline hyphen", "items:\n  - -key: value\n", 2),
+            ("inline dot", "items:\n  - .key: value\n", 2),
+            ("true lowercase", "true: value\n", 1),
+            ("true uppercase nested", "root:\n  TRUE: value\n", 2),
+            ("true mixed inline", "items:\n  - TrUe: value\n", 2),
+            ("false lowercase", "false: value\n", 1),
+            ("false uppercase nested", "root:\n  FALSE: value\n", 2),
+            ("false mixed inline", "items:\n  - FaLsE: value\n", 2),
+            ("null lowercase", "null: value\n", 1),
+            ("null uppercase nested", "root:\n  NULL: value\n", 2),
+            ("null mixed inline", "items:\n  - NuLl: value\n", 2),
+            ("leading-zero integer", "1: first\n01: second\n", 1),
+            ("radix integer", "0x10: first\n16: second\n", 1),
+            (
+                "boolean integer float equality",
+                "true: boolean\n1: integer\n1.0: float\n",
+                1,
+            ),
+            ("decimal exponent float", "1.0: decimal\n1e0: exponent\n", 1),
+            (
+                "infinity variants",
+                ".inf: lower\n.Inf: title\n.INF: upper\n",
+                1,
+            ),
+            (
+                "nan variants",
+                ".nan: lower\n.NaN: title\n.NAN: upper\n",
+                1,
+            ),
+            ("positive infinity JSON names", ".inf: first\nInfinity: second\n", 1),
+            (
+                "negative infinity JSON names",
+                "-.inf: first\n-Infinity: second\n",
+                1,
+            ),
+            ("nan JSON names", ".nan: first\nNaN: second\n", 1),
+        )
+        mocked_result = subprocess.CompletedProcess(
+            ["yq"],
+            0,
+            "{}\n",
+            "",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for name, contents, line in fixtures:
+                with self.subTest(name=name):
+                    path = Path(directory) / f"{name.replace(' ', '-')}.yml"
+                    path.write_text(contents, encoding="utf-8")
+                    with patch(
+                        "governance.subprocess.run",
+                        return_value=mocked_result,
+                    ) as run:
+                        with self.assertRaises(GovernanceError) as caught:
+                            load_yaml(path)
+                    self.assertEqual(
+                        str(caught.exception),
+                        f"{path}:{line}: {key_reason}",
+                    )
+                    run.assert_not_called()
+
+            path = Path(directory) / "valid-string-keys.yml"
+            path.write_text(
+                "on: trigger\n"
+                "_meta: metadata\n"
+                "field.id: field\n"
+                "key-1: dash\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                load_yaml(path),
+                {
+                    "on": "trigger",
+                    "_meta": "metadata",
+                    "field.id": "field",
+                    "key-1": "dash",
+                },
+            )
+
+    def test_yaml_profile_uses_only_ascii_yaml_separation(self) -> None:
+        key_reason = (
+            "mapping keys must use only ASCII letters, digits, _, ., and -, "
+            "begin with an ASCII letter or _, and not equal true, false, or null"
+        )
+        unicode_spaces = (
+            ("no-break space", "\u00a0"),
+            ("em space", "\u2003"),
+        )
+        mocked_result = subprocess.CompletedProcess(
+            ["yq"],
+            0,
+            "{}\n",
+            "",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for space_name, space in unicode_spaces:
+                rejected = (
+                    (
+                        "non-ASCII key before hash",
+                        f"na\u00efve: value{space}# literal\n",
+                        1,
+                        key_reason,
+                    ),
+                    (
+                        "flow node before hash",
+                        f"value: {{one: 1}}{space}# literal\n",
+                        1,
+                        "flow collections are unsupported",
+                    ),
+                    (
+                        "duplicate before hash",
+                        f"name: first{space}# literal\nname: second\n",
+                        2,
+                        "duplicate YAML mapping key: name",
+                    ),
+                    (
+                        "Unicode-only structural line after block",
+                        f"value: |\n{space}\n",
+                        2,
+                        "unsupported structural YAML syntax",
+                    ),
+                )
+                for name, contents, line, reason in rejected:
+                    with self.subTest(space=space_name, rejected=name):
+                        path = Path(directory) / (
+                            f"{space_name.replace(' ', '-')}-"
+                            f"{name.replace(' ', '-')}.yml"
+                        )
+                        path.write_text(contents, encoding="utf-8")
+                        with patch(
+                            "governance.subprocess.run",
+                            return_value=mocked_result,
+                        ) as run:
+                            with self.assertRaises(GovernanceError) as caught:
+                                load_yaml(path)
+                        self.assertEqual(
+                            str(caught.exception),
+                            f"{path}:{line}: {reason}",
+                        )
+                        run.assert_not_called()
+
+                accepted = (
+                    (
+                        "colon remains scalar data",
+                        f"items:\n  - value:{space}literal\n",
+                        {"items": [f"value:{space}literal"]},
+                    ),
+                    (
+                        "Unicode-prefixed flow text remains scalar data",
+                        f"items:\n  - {space}[one]\n",
+                        {"items": [f"{space}[one]"]},
+                    ),
+                    (
+                        "hash remains scalar data",
+                        f"items:\n  - value{space}#literal\n",
+                        {"items": [f"value{space}#literal"]},
+                    ),
+                )
+                for name, contents, expected in accepted:
+                    with self.subTest(space=space_name, accepted=name):
+                        path = Path(directory) / (
+                            f"accepted-{space_name.replace(' ', '-')}-"
+                            f"{name.replace(' ', '-')}.yml"
+                        )
+                        path.write_text(contents, encoding="utf-8")
+                        self.assertEqual(load_yaml(path), expected)
+
+            controls = (
+                (
+                    "ASCII-space comments",
+                    "note: value # real comment\n"
+                    "items:\n"
+                    "  - scalar # real comment\n",
+                    {"note": "value", "items": ["scalar"]},
+                ),
+                (
+                    "single-line quoted scalar",
+                    'value: "{literal: [value]} # data"\n',
+                    {"value": "{literal: [value]} # data"},
+                ),
+                (
+                    "opaque block scalar body",
+                    "value: |\n"
+                    "  na\u00efve: value\n"
+                    "  nested: [flow]\n"
+                    "  duplicate:\n"
+                    "  duplicate:\n"
+                    "  \u00a0\n",
+                    {
+                        "value": (
+                            "na\u00efve: value\n"
+                            "nested: [flow]\n"
+                            "duplicate:\n"
+                            "duplicate:\n"
+                            "\u00a0\n"
+                        )
+                    },
+                ),
+            )
+            for name, contents, expected in controls:
+                with self.subTest(control=name):
+                    path = Path(directory) / f"control-{name.replace(' ', '-')}.yml"
+                    path.write_text(contents, encoding="utf-8")
+                    self.assertEqual(load_yaml(path), expected)
+
+    def test_yaml_profile_enforces_portable_line_character_contract(self) -> None:
+        forbidden = (
+            ("U+0085", "\u0085"),
+            ("U+2028", "\u2028"),
+            ("U+2029", "\u2029"),
+        )
+        contexts = (
+            (
+                "double quoted scalar",
+                lambda character: f'value: "left{character}right"\n',
+                1,
+            ),
+            (
+                "single quoted scalar",
+                lambda character: f"value: 'left{character}right'\n",
+                1,
+            ),
+            (
+                "plain scalar",
+                lambda character: f"value: left{character}right\n",
+                1,
+            ),
+            (
+                "content after quoted scalar",
+                lambda character: f'value: "ok"{character}next: fine\n',
+                1,
+            ),
+            (
+                "comment",
+                lambda character: f"value: ok # left{character}right\n",
+                1,
+            ),
+            (
+                "block scalar body",
+                lambda character: f"value: |\n  left{character}right\n",
+                2,
+            ),
+        )
+        physical_breaks = (
+            ("LF", b"name: first\nname: second\n"),
+            ("CRLF", b"name: first\r\nname: second\r\n"),
+            ("CR", b"name: first\rname: second\r"),
+        )
+        mocked_result = subprocess.CompletedProcess(
+            ["yq"],
+            0,
+            "{}\n",
+            "",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for code_point, character in forbidden:
+                for context, fixture, line in contexts:
+                    with self.subTest(
+                        code_point=code_point,
+                        context=context,
+                    ):
+                        path = root / (
+                            f"{code_point.lower()}-{context.replace(' ', '-')}.yml"
+                        )
+                        path.write_text(fixture(character), encoding="utf-8")
+                        with patch(
+                            "governance.subprocess.run",
+                            return_value=mocked_result,
+                        ) as run:
+                            with self.assertRaises(GovernanceError) as caught:
+                                load_yaml(path)
+                        self.assertEqual(
+                            str(caught.exception),
+                            f"{path}:{line}: {code_point} is unsupported by "
+                            "the portable YAML profile",
+                        )
+                        run.assert_not_called()
+
+            for index, (name, contents) in enumerate(physical_breaks):
+                with self.subTest(line_break=name):
+                    path = root / f"physical-{index}.yml"
+                    path.write_bytes(contents)
+                    with patch(
+                        "governance.subprocess.run",
+                        return_value=mocked_result,
+                    ) as run:
+                        with self.assertRaises(GovernanceError) as caught:
+                            load_yaml(path)
+                    self.assertEqual(
+                        str(caught.exception),
+                        f"{path}:2: duplicate YAML mapping key: name",
+                    )
+                    run.assert_not_called()
+
+    def test_load_yaml_wraps_profile_read_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invalid_utf8 = root / "invalid-utf8.yml"
+            invalid_utf8.write_bytes(b"value: \xff\n")
+            fixtures = (
+                ("missing", root / "missing.yml", OSError),
+                ("invalid UTF-8", invalid_utf8, UnicodeError),
+            )
+            for name, path, cause_type in fixtures:
+                with self.subTest(name=name):
+                    with patch("governance.subprocess.run") as run:
+                        with self.assertRaises(GovernanceError) as caught:
+                            load_yaml(path)
+                    self.assertEqual(
+                        str(caught.exception),
+                        f"{path}: unable to read YAML profile",
+                    )
+                    self.assertIsInstance(caught.exception.__cause__, cause_type)
+                    run.assert_not_called()
+
+    def test_every_governed_repository_yaml_conforms_to_profile(self) -> None:
+        paths = (
+            ROOT / ".github" / "labels.yml",
+            ROOT / ".github" / "dependabot.yml",
+            ROOT / ".github" / "workflows" / "governance.yml",
+            ROOT / ".github" / "ISSUE_TEMPLATE" / "config.yml",
+            ROOT / ".github" / "ISSUE_TEMPLATE" / "01-bug-report.yml",
+            ROOT / ".github" / "ISSUE_TEMPLATE" / "02-feature-proposal.yml",
+            ROOT / ".github" / "ISSUE_TEMPLATE" / "03-documentation-issue.yml",
+            ROOT / ".github" / "ISSUE_TEMPLATE" / "04-maintenance-proposal.yml",
+        )
+        for path in paths:
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertIsInstance(load_yaml(path), dict)
 
 
 class LabelManifestTests(unittest.TestCase):
@@ -405,6 +1250,160 @@ labels:
                 "color must be six lowercase hex digits",
             ):
                 validate_label_manifest(path)
+
+
+class AutomationPolicyTests(unittest.TestCase):
+    def test_repository_automation_is_minimal_and_pinned(self) -> None:
+        labels = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        self.assertEqual(validate_automation(ROOT, labels), [])
+
+    def test_different_full_sha_checkout_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "governance.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                (ROOT / ".github" / "workflows" / "governance.yml")
+                .read_text(encoding="utf-8")
+                .replace(
+                    "3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "0000000000000000000000000000000000000000",
+                ),
+                encoding="utf-8",
+            )
+            dependabot = root / ".github" / "dependabot.yml"
+            dependabot.write_text(
+                (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            labels = validate_label_manifest(ROOT / ".github" / "labels.yml")
+            errors = validate_automation(root, labels)
+            self.assertTrue(
+                any(
+                    "action reference must equal the approved checkout reference"
+                    in error
+                    for error in errors
+                )
+            )
+
+    def test_unpinned_action_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "governance.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                """
+name: Governance
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    name: Governance validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: python3 .github/scripts/validate_governance.py
+""".lstrip(),
+                encoding="utf-8",
+            )
+            dependabot = root / ".github" / "dependabot.yml"
+            dependabot.write_text(
+                """
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+      - "status: needs-triage"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            (workflow.parent / "unexpected.yml").write_text(
+                "name: Unexpected\n",
+                encoding="utf-8",
+            )
+            labels = (
+                LabelDefinition("dependencies", "0366d6", "Dependencies.", "work"),
+                LabelDefinition(
+                    "status: needs-triage",
+                    "d4c5f9",
+                    "Triage.",
+                    "status",
+                ),
+            )
+            errors = validate_automation(root, labels)
+            self.assertTrue(any("action reference must use a full SHA" in error for error in errors))
+            self.assertTrue(
+                any("workflow files must equal ['governance.yml']" in error for error in errors)
+            )
+
+    def test_expression_in_run_script_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "governance.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                """
+name: Governance
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    name: Governance validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: echo "${{ github.event.pull_request.title }}"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            dependabot = root / ".github" / "dependabot.yml"
+            dependabot.write_text(
+                """
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+      - "status: needs-triage"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            labels = (
+                LabelDefinition("dependencies", "0366d6", "Dependencies.", "work"),
+                LabelDefinition(
+                    "status: needs-triage",
+                    "d4c5f9",
+                    "Triage.",
+                    "status",
+                ),
+            )
+            errors = validate_automation(root, labels)
+            self.assertTrue(any("GitHub expression in run script" in error for error in errors))
 
 
 class IssueFormTests(unittest.TestCase):
