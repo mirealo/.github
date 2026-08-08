@@ -1,0 +1,99 @@
+name: Documentation issue
+description: Report incorrect, missing, unclear, or outdated documentation.
+title: "[Docs]: "
+labels:
+  - documentation
+  - "status: needs-triage"
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us make Mirealo documentation accurate and actionable.
+
+        Do not include secrets, personal data, customer data, proprietary
+        information, or suspected security vulnerabilities. Follow the
+        [security policy](https://github.com/mirealo/.github/blob/main/SECURITY.md)
+        and report suspected vulnerabilities through the affected repository's
+        private reporting flow.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      options:
+        - label: I searched the existing documentation issues and relevant documentation.
+          required: true
+        - label: I removed secrets, personal data, proprietary information, and sensitive diagnostics.
+          required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Affected documentation
+      description: Provide the page, file, section, or URL.
+      placeholder: e.g. docs/getting-started.md#installation
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Incorrect
+        - Missing
+        - Unclear
+        - Outdated
+        - Broken example or link
+    validations:
+      required: true
+
+  - type: textarea
+    id: audience
+    attributes:
+      label: Intended audience
+      description: Identify the users affected and the task they are trying to complete.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Documentation problem
+      description: Explain what is wrong and how it affects understanding or task completion.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_content
+    attributes:
+      label: Expected or proposed correction
+      description: Describe the accurate content or outcome the documentation should provide.
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References or verification source
+      description: >-
+        Link the related implementation or authoritative source, or state "Not
+        applicable" with a short explanation.
+    validations:
+      required: true
+
+  - type: upload
+    id: attachments
+    attributes:
+      label: Sanitized attachments
+      description: Optionally attach screenshots or supporting files with sensitive data removed.
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Contribution
+      description: Would you be willing to submit a pull request after maintainers confirm the direction?
+      options:
+        - Yes, I can submit a pull request
+        - Maybe, with maintainer guidance

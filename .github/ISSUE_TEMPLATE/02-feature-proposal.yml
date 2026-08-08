@@ -1,0 +1,108 @@
+name: Feature proposal
+description: Propose a focused improvement with a clear, testable user benefit.
+title: "[Feature]: "
+labels:
+  - enhancement
+  - "status: needs-triage"
+type: Feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user need before prescribing an implementation. General
+        questions and support requests should follow the
+        [support policy](https://github.com/mirealo/.github/blob/main/SUPPORT.md).
+
+        Do not include secrets, personal data, customer data, or proprietary
+        information. Follow the
+        [security policy](https://github.com/mirealo/.github/blob/main/SECURITY.md)
+        and report suspected vulnerabilities through the affected repository's
+        private reporting flow.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      options:
+        - label: I searched the existing issues and relevant documentation.
+          required: true
+        - label: This is an actionable product or engineering proposal, not a general support request.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or unmet need
+      description: Explain the limitation without assuming a particular solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: users_and_use_case
+    attributes:
+      label: Target users and use case
+      description: Identify who is affected and describe a concrete workflow.
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired_outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable behavior or capability users need.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: List testable conditions that would make the proposal successful.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope_and_non_goals
+    attributes:
+      label: Scope and non-goals
+      description: Define the boundaries and behavior intentionally excluded from this proposal.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: Describe the current workaround, or state "None available."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Explain competing approaches and why they do not fully address the need.
+    validations:
+      required: true
+
+  - type: textarea
+    id: implications
+    attributes:
+      label: Security, privacy, and compatibility implications
+      description: >-
+        Address migration, operational, security, privacy, and compatibility
+        effects, or state "None identified" with a short explanation.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Contribution
+      description: Would you be willing to help after maintainers accept the direction?
+      options:
+        - Yes, I can submit a pull request
+        - Maybe, with maintainer guidance

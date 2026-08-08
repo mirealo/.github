@@ -1,5 +1,10 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Private security report
-    url: https://github.com/mirealo/.github/security/advisories/new
-    about: Report suspected vulnerabilities privately. Do not open a public issue.
+  - name: Security vulnerability
+    url: https://github.com/mirealo/.github/blob/main/SECURITY.md
+    about: >-
+      Read the security policy and report privately through the affected
+      repository. Never disclose a vulnerability in a public issue.
+  - name: Support and questions
+    url: https://github.com/mirealo/.github/blob/main/SUPPORT.md
+    about: Review the support policy. Issues are reserved for actionable bugs, features, and documentation work.
