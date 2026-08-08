@@ -11,7 +11,14 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parents[1]
 sys.path.insert(0, str(SCRIPTS))
 
-from governance import GovernanceError, load_yaml, validate_label_manifest
+from governance import (
+    GovernanceError,
+    LabelDefinition,
+    load_yaml,
+    validate_issue_forms,
+    validate_label_manifest,
+    validate_repository,
+)
 
 
 class YamlAdapterTests(unittest.TestCase):
@@ -283,6 +290,176 @@ labels:
                 "color must be six lowercase hex digits",
             ):
                 validate_label_manifest(path)
+
+
+class IssueFormTests(unittest.TestCase):
+    def test_repository_requires_four_ordered_forms(self) -> None:
+        errors = validate_repository(ROOT)
+        self.assertEqual(errors, [])
+
+    def test_unknown_automatic_label_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            template = root / ".github" / "ISSUE_TEMPLATE"
+            template.mkdir(parents=True)
+            for filename in (
+                "01-bug-report.yml",
+                "02-feature-proposal.yml",
+                "03-documentation-issue.yml",
+                "04-maintenance-proposal.yml",
+            ):
+                (template / filename).write_text(
+                    """
+name: Example
+description: Example form.
+labels:
+  - missing-label
+type: Task
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+    validations:
+      required: true
+""".lstrip(),
+                    encoding="utf-8",
+                )
+            (template / "config.yml").write_text(
+                "blank_issues_enabled: false\ncontact_links: []\n",
+                encoding="utf-8",
+            )
+            labels = (
+                LabelDefinition("maintenance", "5319e7", "Maintenance.", "work"),
+            )
+            errors = validate_issue_forms(root, labels)
+            self.assertTrue(
+                any("unknown automatic label: missing-label" in error for error in errors)
+            )
+
+    def test_duplicate_field_id_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            template = root / ".github" / "ISSUE_TEMPLATE"
+            template.mkdir(parents=True)
+            content = """
+name: Example
+description: Example form.
+labels:
+  - maintenance
+type: Task
+body:
+  - type: textarea
+    id: repeated
+    attributes:
+      label: First
+  - type: input
+    id: repeated
+    attributes:
+      label: Second
+""".lstrip()
+            for filename in (
+                "01-bug-report.yml",
+                "02-feature-proposal.yml",
+                "03-documentation-issue.yml",
+                "04-maintenance-proposal.yml",
+            ):
+                (template / filename).write_text(content, encoding="utf-8")
+            (template / "config.yml").write_text(
+                "blank_issues_enabled: false\ncontact_links: []\n",
+                encoding="utf-8",
+            )
+            labels = (
+                LabelDefinition("maintenance", "5319e7", "Maintenance.", "work"),
+            )
+            errors = validate_issue_forms(root, labels)
+            self.assertTrue(any("duplicate field id: repeated" in error for error in errors))
+
+    def test_filename_contract_rejects_wrong_type_and_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            template = root / ".github" / "ISSUE_TEMPLATE"
+            template.mkdir(parents=True)
+            metadata = {
+                "01-bug-report.yml": ("Bug report", "Task", ["maintenance"]),
+                "02-feature-proposal.yml": (
+                    "Feature proposal",
+                    "Feature",
+                    ["enhancement", "status: needs-triage"],
+                ),
+                "03-documentation-issue.yml": (
+                    "Documentation issue",
+                    "Task",
+                    ["documentation", "status: needs-triage"],
+                ),
+                "04-maintenance-proposal.yml": (
+                    "Maintenance proposal",
+                    "Task",
+                    ["maintenance", "status: needs-triage"],
+                ),
+            }
+            for filename, (name, issue_type, automatic_labels) in metadata.items():
+                labels_yaml = "\n".join(
+                    f'  - "{label}"' if ":" in label else f"  - {label}"
+                    for label in automatic_labels
+                )
+                (template / filename).write_text(
+                    (
+                        f"name: {name}\n"
+                        "description: Example form.\n"
+                        f"labels:\n{labels_yaml}\n"
+                        f"type: {issue_type}\n"
+                        "body:\n"
+                        "  - type: textarea\n"
+                        "    id: outcome\n"
+                        "    attributes:\n"
+                        "      label: Outcome\n"
+                    ),
+                    encoding="utf-8",
+                )
+            (template / "config.yml").write_text(
+                """
+blank_issues_enabled: false
+contact_links:
+  - name: Security
+    url: https://github.com/mirealo/.github/blob/main/SECURITY.md
+    about: Report privately.
+  - name: Support
+    url: https://github.com/mirealo/.github/blob/main/SUPPORT.md
+    about: Read the support policy.
+""".lstrip(),
+                encoding="utf-8",
+            )
+            labels = (
+                LabelDefinition("bug", "d73a4a", "Bug.", "work"),
+                LabelDefinition("enhancement", "a2eeef", "Enhancement.", "work"),
+                LabelDefinition(
+                    "documentation", "0075ca", "Documentation.", "work"
+                ),
+                LabelDefinition(
+                    "maintenance", "5319e7", "Maintenance.", "work"
+                ),
+                LabelDefinition(
+                    "status: needs-triage",
+                    "d4c5f9",
+                    "Needs triage.",
+                    "status",
+                ),
+            )
+            errors = validate_issue_forms(root, labels)
+            self.assertTrue(
+                any(
+                    "01-bug-report.yml must use native type Bug" in error
+                    for error in errors
+                )
+            )
+            self.assertTrue(
+                any(
+                    "01-bug-report.yml labels must equal "
+                    "['bug', 'status: needs-triage']" in error
+                    for error in errors
+                )
+            )
 
 
 if __name__ == "__main__":

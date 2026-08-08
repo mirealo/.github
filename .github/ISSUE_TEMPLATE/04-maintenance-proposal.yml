@@ -1,0 +1,89 @@
+name: Maintenance proposal
+description: Propose focused technical, automation, policy, or repository upkeep.
+title: "[Maintenance]: "
+labels:
+  - maintenance
+  - "status: needs-triage"
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for actionable maintenance that is not a product feature,
+        reproducible defect, or documentation correction.
+
+        Do not include secrets, personal data, customer data, proprietary
+        information, or suspected vulnerabilities. Follow the
+        [security policy](https://github.com/mirealo/.github/blob/main/SECURITY.md)
+        and report vulnerabilities privately through the affected repository.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      options:
+        - label: I searched existing issues, pull requests, and documentation.
+          required: true
+        - label: This proposal is focused maintenance rather than a support request.
+          required: true
+        - label: I removed secrets, personal data, proprietary information, and sensitive diagnostics.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Current operational problem
+      description: Explain the maintenance burden, risk, or recurring failure.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable result without requiring one implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-goals
+      description: Identify affected components and behavior intentionally excluded.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: List testable conditions that prove the maintenance is complete.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: implications
+    attributes:
+      label: Risk and compatibility implications
+      description: Address security, privacy, migration, rollback, and compatibility, or explain why none apply.
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation strategy
+      description: Describe the automated and manual evidence that should verify the change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe lower-cost alternatives or explain why none are suitable.
+    validations:
+      required: true
