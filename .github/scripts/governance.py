@@ -238,6 +238,31 @@ class LabelDrift:
         return not (self.create or self.update or self.extra)
 
 
+def compare_labels(
+    expected: tuple[LabelDefinition, ...],
+    actual: tuple[RemoteLabel, ...],
+) -> LabelDrift:
+    expected_by_name = {label.name: label for label in expected}
+    actual_by_name = {label.name: label for label in actual}
+    create = tuple(
+        expected_by_name[name]
+        for name in sorted(expected_by_name.keys() - actual_by_name.keys())
+    )
+    update = tuple(
+        (expected_by_name[name], actual_by_name[name])
+        for name in sorted(expected_by_name.keys() & actual_by_name.keys())
+        if (
+            expected_by_name[name].color.lower() != actual_by_name[name].color.lower()
+            or expected_by_name[name].description != actual_by_name[name].description
+        )
+    )
+    extra = tuple(
+        actual_by_name[name]
+        for name in sorted(actual_by_name.keys() - expected_by_name.keys())
+    )
+    return LabelDrift(create=create, update=update, extra=extra)
+
+
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(

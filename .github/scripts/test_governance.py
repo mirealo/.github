@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import contextlib
+import importlib
+import io
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parents[1]
@@ -14,7 +18,9 @@ sys.path.insert(0, str(SCRIPTS))
 from governance import (
     GovernanceError,
     LabelDefinition,
+    RemoteLabel,
     REQUIRED_POLICY_HEADINGS,
+    compare_labels,
     load_yaml,
     validate_community_files,
     validate_issue_forms,
@@ -1575,6 +1581,189 @@ contact_links:
                     for error in errors
                 )
             )
+
+
+class LabelDriftTests(unittest.TestCase):
+    def test_classifies_create_update_and_extra(self) -> None:
+        expected = (
+            LabelDefinition("bug", "d73a4a", "Defect.", "work"),
+            LabelDefinition("maintenance", "5319e7", "Upkeep.", "work"),
+        )
+        actual = (
+            RemoteLabel("bug", "ffffff", "Old description."),
+            RemoteLabel("unexpected", "000000", "Unexpected."),
+        )
+        drift = compare_labels(expected, actual)
+        self.assertEqual([label.name for label in drift.create], ["maintenance"])
+        self.assertEqual(
+            [(wanted.name, current.name) for wanted, current in drift.update],
+            [("bug", "bug")],
+        )
+        self.assertEqual([label.name for label in drift.extra], ["unexpected"])
+        self.assertFalse(drift.clean)
+
+    def test_matching_labels_are_clean(self) -> None:
+        expected = (
+            LabelDefinition("bug", "d73a4a", "Defect.", "work"),
+        )
+        actual = (
+            RemoteLabel("bug", "D73A4A", "Defect."),
+        )
+        self.assertTrue(compare_labels(expected, actual).clean)
+
+
+class SyncCliContractTests(unittest.TestCase):
+    def _sync_module(self):
+        try:
+            return importlib.import_module("sync_labels")
+        except ModuleNotFoundError:
+            self.fail("sync_labels CLI module is missing")
+
+    @staticmethod
+    def _remote_json(labels: tuple[LabelDefinition, ...]) -> str:
+        return json.dumps(
+            [
+                {
+                    "name": label.name,
+                    "color": label.color,
+                    "description": label.description,
+                }
+                for label in labels
+            ]
+        )
+
+    def test_rejects_repository_override(self) -> None:
+        sync_labels = self._sync_module()
+        stderr = io.StringIO()
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["sync_labels.py", "--repo", "another/repository"],
+            ),
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            sync_labels.parse_arguments()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn(
+            "unrecognized arguments: --repo another/repository",
+            stderr.getvalue(),
+        )
+
+    def test_apply_refuses_extras_without_mutation(self) -> None:
+        sync_labels = self._sync_module()
+        expected = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        remote = json.loads(self._remote_json(expected))
+        remote.append(
+            {
+                "name": "unexpected",
+                "color": "000000",
+                "description": "Unexpected.",
+            }
+        )
+        list_command = [
+            "label",
+            "list",
+            "--repo",
+            "mirealo/.github",
+            "--limit",
+            "100",
+            "--json",
+            "name,color,description",
+        ]
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch.object(sync_labels, "run_gh", return_value=json.dumps(remote))
+            as run_gh,
+            patch.object(sys, "argv", ["sync_labels.py", "--apply"]),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = sync_labels.main()
+        self.assertEqual(result, 2)
+        self.assertEqual(run_gh.call_args_list, [call(list_command)])
+        self.assertEqual(
+            stderr.getvalue(),
+            "ERROR: refusing --apply while unexpected labels exist; "
+            "review explicit renames first.\n",
+        )
+
+    def test_apply_creates_updates_and_verifies_without_delete(self) -> None:
+        sync_labels = self._sync_module()
+        expected = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        missing = expected[0]
+        changed = expected[1]
+        remote = json.loads(self._remote_json(expected[1:]))
+        remote[0]["color"] = "ffffff"
+        remote[0]["description"] = "Old description."
+        list_command = [
+            "label",
+            "list",
+            "--repo",
+            "mirealo/.github",
+            "--limit",
+            "100",
+            "--json",
+            "name,color,description",
+        ]
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch.object(
+                sync_labels,
+                "run_gh",
+                side_effect=[
+                    json.dumps(remote),
+                    "",
+                    "",
+                    self._remote_json(expected),
+                ],
+            ) as run_gh,
+            patch.object(sys, "argv", ["sync_labels.py", "--apply"]),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = sync_labels.main()
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            run_gh.call_args_list,
+            [
+                call(list_command),
+                call(
+                    [
+                        "label",
+                        "create",
+                        missing.name,
+                        "--repo",
+                        "mirealo/.github",
+                        "--color",
+                        missing.color,
+                        "--description",
+                        missing.description,
+                    ]
+                ),
+                call(
+                    [
+                        "label",
+                        "edit",
+                        changed.name,
+                        "--repo",
+                        "mirealo/.github",
+                        "--color",
+                        changed.color,
+                        "--description",
+                        changed.description,
+                    ]
+                ),
+                call(list_command),
+            ],
+        )
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertTrue(
+            stdout.getvalue().endswith("Labels match the canonical manifest.\n")
+        )
 
 
 if __name__ == "__main__":
