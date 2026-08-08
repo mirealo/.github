@@ -4,6 +4,7 @@ import contextlib
 import importlib
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,81 @@ from governance import (
     validate_automation,
     validate_repository,
 )
+
+
+_MISSING = object()
+
+
+def _copy_issue_form_fixture(root: Path) -> tuple[LabelDefinition, ...]:
+    shutil.copytree(
+        ROOT / ".github" / "ISSUE_TEMPLATE",
+        root / ".github" / "ISSUE_TEMPLATE",
+    )
+    return validate_label_manifest(ROOT / ".github" / "labels.yml")
+
+
+def _load_form_document(path: Path) -> dict[str, object]:
+    document = load_yaml(path)
+    if not isinstance(document, dict):
+        raise AssertionError(f"test fixture must be a mapping: {path}")
+    return document
+
+
+def _write_form_document(path: Path, document: dict[str, object]) -> None:
+    lines: list[str] = []
+
+    def emit(value: object, indentation: int) -> None:
+        prefix = " " * indentation
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise AssertionError("fixture mapping keys must be strings")
+                if isinstance(item, dict):
+                    if item:
+                        lines.append(f"{prefix}{key}:")
+                        emit(item, indentation + 2)
+                    else:
+                        lines.append(f"{prefix}{key}: {{}}")
+                elif isinstance(item, list):
+                    if item:
+                        lines.append(f"{prefix}{key}:")
+                        emit(item, indentation + 2)
+                    else:
+                        lines.append(f"{prefix}{key}: []")
+                else:
+                    lines.append(
+                        f"{prefix}{key}: {json.dumps(item, ensure_ascii=False)}"
+                    )
+            return
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, (dict, list)):
+                    lines.append(f"{prefix}-")
+                    emit(item, indentation + 2)
+                else:
+                    lines.append(
+                        f"{prefix}- {json.dumps(item, ensure_ascii=False)}"
+                    )
+            return
+        raise AssertionError("fixture root must be a mapping or list")
+
+    emit(document, 0)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _mutate_document_path(
+    document: dict[str, object],
+    path: tuple[str | int, ...],
+    value: object,
+) -> None:
+    target: object = document
+    for part in path[:-1]:
+        target = target[part]  # type: ignore[index]
+    final = path[-1]
+    if value is _MISSING:
+        del target[final]  # type: ignore[index]
+    else:
+        target[final] = value  # type: ignore[index]
 
 
 class CommunityFileTests(unittest.TestCase):
@@ -132,6 +208,39 @@ class CommunityFileTests(unittest.TestCase):
                 ".github/CODEOWNERS: wildcard owner is required",
                 errors,
             )
+
+    def test_community_read_failures_are_path_controlled(self) -> None:
+        cases = (
+            ("markdown policy", Path("SECURITY.md")),
+            ("CODEOWNERS", Path(".github/CODEOWNERS")),
+        )
+        for case_name, relative in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                shutil.copytree(
+                    ROOT,
+                    root,
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns(
+                        ".git",
+                        ".superpowers",
+                        "__pycache__",
+                    ),
+                )
+                (root / relative).write_bytes(b"\xff\xfe\x80")
+
+                try:
+                    errors = validate_community_files(root)
+                except (OSError, UnicodeError) as error:
+                    self.fail(
+                        f"{relative.as_posix()} raised {type(error).__name__} "
+                        "instead of returning a controlled diagnostic"
+                    )
+
+                self.assertEqual(
+                    errors,
+                    [f"{relative.as_posix()}: unable to read as UTF-8"],
+                )
 
 
 class PolicyStructureTests(unittest.TestCase):
@@ -1417,6 +1526,363 @@ class IssueFormTests(unittest.TestCase):
         labels = validate_label_manifest(ROOT / ".github" / "labels.yml")
         errors = validate_issue_forms(ROOT, labels)
         self.assertEqual(errors, [])
+
+    def test_issue_form_schema_rejects_empty_or_markdown_only_body(self) -> None:
+        with self.subTest(body="empty"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            labels = _copy_issue_form_fixture(root)
+            form_path = (
+                root / ".github" / "ISSUE_TEMPLATE" / "01-bug-report.yml"
+            )
+            document = _load_form_document(form_path)
+            document["body"] = []
+            _write_form_document(form_path, document)
+
+            errors = validate_issue_forms(root, labels)
+
+            self.assertIn(
+                f"{form_path}:8: flow collections are unsupported",
+                errors,
+            )
+
+        with self.subTest(body="markdown-only"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            labels = _copy_issue_form_fixture(root)
+            form_path = (
+                root / ".github" / "ISSUE_TEMPLATE" / "01-bug-report.yml"
+            )
+            document = _load_form_document(form_path)
+            body = document["body"]
+            self.assertIsInstance(body, list)
+            document["body"] = [body[0]]
+            _write_form_document(form_path, document)
+
+            errors = validate_issue_forms(root, labels)
+
+            self.assertIn(
+                f"{form_path}: body must contain at least one non-markdown field",
+                errors,
+            )
+
+    def test_issue_form_schema_rejects_invalid_type_specific_attributes(self) -> None:
+        cases: list[
+            tuple[str, tuple[str | int, ...], object, str]
+        ] = [
+            (
+                "markdown missing value",
+                ("body", 0, "attributes"),
+                {"description": "Context without a value."},
+                "{path}: body[0]: markdown value must be a non-empty string",
+            ),
+            (
+                "markdown non-string value",
+                ("body", 0, "attributes", "value"),
+                7,
+                "{path}: body[0]: markdown value must be a non-empty string",
+            ),
+            (
+                "markdown empty value",
+                ("body", 0, "attributes", "value"),
+                "",
+                "{path}: body[0]: markdown value must be a non-empty string",
+            ),
+        ]
+        for body_type, index in (
+            ("input", 2),
+            ("textarea", 7),
+            ("dropdown", 4),
+            ("checkboxes", 1),
+            ("upload", 13),
+        ):
+            cases.extend(
+                (
+                    (
+                        f"{body_type} missing label",
+                        ("body", index, "attributes", "label"),
+                        _MISSING,
+                        f"{{path}}: body[{index}]: {body_type} label must be a non-empty string",
+                    ),
+                    (
+                        f"{body_type} non-string label",
+                        ("body", index, "attributes", "label"),
+                        7,
+                        f"{{path}}: body[{index}]: {body_type} label must be a non-empty string",
+                    ),
+                    (
+                        f"{body_type} empty label",
+                        ("body", index, "attributes", "label"),
+                        "",
+                        f"{{path}}: body[{index}]: {body_type} label must be a non-empty string",
+                    ),
+                )
+            )
+        cases.extend(
+            (
+                (
+                    "dropdown missing options",
+                    ("body", 4, "attributes", "options"),
+                    _MISSING,
+                    "{path}: body[4]: dropdown options must be a non-empty list of distinct strings",
+                ),
+                (
+                    "dropdown empty options",
+                    ("body", 4, "attributes", "options"),
+                    [],
+                    "{path}:56: flow collections are unsupported",
+                ),
+                (
+                    "dropdown non-string option",
+                    ("body", 4, "attributes", "options"),
+                    ["One", 2],
+                    "{path}: body[4]: dropdown options must be a non-empty list of distinct strings",
+                ),
+                (
+                    "dropdown duplicate options",
+                    ("body", 4, "attributes", "options"),
+                    ["Repeated", "Repeated"],
+                    "{path}: body[4]: dropdown options must be a non-empty list of distinct strings",
+                ),
+                (
+                    "dropdown non-Boolean multiple",
+                    ("body", 4, "attributes", "multiple"),
+                    "false",
+                    "{path}: body[4]: dropdown multiple must be a Boolean",
+                ),
+                (
+                    "dropdown Boolean default",
+                    ("body", 4, "attributes", "default"),
+                    True,
+                    "{path}: body[4]: dropdown default must be a valid non-Boolean option index",
+                ),
+                (
+                    "dropdown non-integer default",
+                    ("body", 4, "attributes", "default"),
+                    1.5,
+                    "{path}: body[4]: dropdown default must be a valid non-Boolean option index",
+                ),
+                (
+                    "dropdown negative default",
+                    ("body", 4, "attributes", "default"),
+                    -1,
+                    "{path}: body[4]: dropdown default must be a valid non-Boolean option index",
+                ),
+                (
+                    "dropdown out-of-range default",
+                    ("body", 4, "attributes", "default"),
+                    4,
+                    "{path}: body[4]: dropdown default must be a valid non-Boolean option index",
+                ),
+                (
+                    "checkboxes missing options",
+                    ("body", 1, "attributes", "options"),
+                    _MISSING,
+                    "{path}: body[1]: checkboxes options must be a non-empty list of mappings",
+                ),
+                (
+                    "checkboxes empty options",
+                    ("body", 1, "attributes", "options"),
+                    [],
+                    "{path}:19: flow collections are unsupported",
+                ),
+                (
+                    "checkboxes non-mapping option",
+                    ("body", 1, "attributes", "options"),
+                    ["not a mapping"],
+                    "{path}: body[1]: checkboxes options must be a non-empty list of mappings",
+                ),
+                (
+                    "checkbox option missing label",
+                    ("body", 1, "attributes", "options", 0, "label"),
+                    _MISSING,
+                    "{path}: body[1]: checkbox option labels must be non-empty distinct strings",
+                ),
+                (
+                    "checkbox option non-string label",
+                    ("body", 1, "attributes", "options", 0, "label"),
+                    7,
+                    "{path}: body[1]: checkbox option labels must be non-empty distinct strings",
+                ),
+                (
+                    "checkbox option empty label",
+                    ("body", 1, "attributes", "options", 0, "label"),
+                    "",
+                    "{path}: body[1]: checkbox option labels must be non-empty distinct strings",
+                ),
+                (
+                    "checkbox option duplicate label",
+                    ("body", 1, "attributes", "options", 1, "label"),
+                    "I searched the existing issues and relevant documentation.",
+                    "{path}: body[1]: checkbox option labels must be non-empty distinct strings",
+                ),
+                (
+                    "checkbox option non-Boolean required",
+                    ("body", 1, "attributes", "options", 0, "required"),
+                    "true",
+                    "{path}: body[1]: checkbox option required must be a Boolean",
+                ),
+                (
+                    "checkbox option unpermitted key",
+                    ("body", 1, "attributes", "options", 0, "unexpected"),
+                    True,
+                    "{path}: body[1]: checkbox option keys must be limited to label and required",
+                ),
+                (
+                    "upload non-string accept",
+                    ("body", 13, "validations"),
+                    {"accept": 7},
+                    "{path}: body[13]: upload accept must be a string",
+                ),
+                (
+                    "unpermitted element key",
+                    ("body", 2, "unexpected"),
+                    True,
+                    "{path}: body[2]: unsupported element key: unexpected",
+                ),
+                (
+                    "unpermitted input attribute key",
+                    ("body", 2, "attributes", "unexpected"),
+                    True,
+                    "{path}: body[2]: unsupported input attribute key: unexpected",
+                ),
+                (
+                    "unpermitted input validation key",
+                    ("body", 2, "validations", "unexpected"),
+                    True,
+                    "{path}: body[2]: unsupported input validation key: unexpected",
+                ),
+                (
+                    "duplicate non-Markdown field labels",
+                    ("body", 3, "attributes", "label"),
+                    "Affected component",
+                    "{path}: duplicate field label: Affected component",
+                ),
+                (
+                    "markdown id",
+                    ("body", 0, "id"),
+                    "context",
+                    "{path}: body[0]: markdown must not define an id",
+                ),
+                (
+                    "markdown validations",
+                    ("body", 0, "validations"),
+                    {"required": True},
+                    "{path}: body[0]: markdown must not define validations",
+                ),
+            )
+        )
+        for body_type, index, attribute in (
+            ("input", 2, "description"),
+            ("input", 2, "placeholder"),
+            ("input", 2, "value"),
+            ("textarea", 7, "description"),
+            ("textarea", 7, "placeholder"),
+            ("textarea", 7, "value"),
+            ("textarea", 7, "render"),
+            ("dropdown", 4, "description"),
+            ("checkboxes", 1, "description"),
+            ("upload", 13, "description"),
+        ):
+            cases.append(
+                (
+                    f"{body_type} non-string {attribute}",
+                    ("body", index, "attributes", attribute),
+                    7,
+                    f"{{path}}: body[{index}]: {body_type} attribute {attribute} must be a string",
+                )
+            )
+
+        for case_name, mutation_path, value, expected_template in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                labels = _copy_issue_form_fixture(root)
+                form_path = (
+                    root
+                    / ".github"
+                    / "ISSUE_TEMPLATE"
+                    / "01-bug-report.yml"
+                )
+                document = _load_form_document(form_path)
+                _mutate_document_path(document, mutation_path, value)
+                _write_form_document(form_path, document)
+
+                errors = validate_issue_forms(root, labels)
+
+                self.assertIn(
+                    expected_template.format(path=form_path),
+                    errors,
+                )
+
+    def test_issue_forms_enforce_boolean_required_and_required_field_contracts(self) -> None:
+        with self.subTest(required="quoted yes"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            labels = _copy_issue_form_fixture(root)
+            form_path = (
+                root / ".github" / "ISSUE_TEMPLATE" / "01-bug-report.yml"
+            )
+            document = _load_form_document(form_path)
+            _mutate_document_path(
+                document,
+                ("body", 2, "validations", "required"),
+                "yes",
+            )
+            _write_form_document(form_path, document)
+
+            errors = validate_issue_forms(root, labels)
+
+            self.assertIn(
+                f"{form_path}: body[2]: validations.required must be a Boolean",
+                errors,
+            )
+
+        required_ids = {
+            "01-bug-report.yml": {
+                "component", "version", "impact", "regression",
+                "reproducibility", "expected_behavior", "actual_behavior",
+                "reproduction_steps", "minimal_reproduction", "environment",
+            },
+            "02-feature-proposal.yml": {
+                "problem", "users_and_use_case", "desired_outcome",
+                "acceptance_criteria", "scope_and_non_goals", "workaround",
+                "alternatives", "implications",
+            },
+            "03-documentation-issue.yml": {
+                "location", "category", "audience", "problem",
+                "expected_content", "references",
+            },
+            "04-maintenance-proposal.yml": {
+                "problem", "outcome", "scope", "acceptance_criteria",
+                "implications", "validation", "alternatives",
+            },
+        }
+        for filename, field_ids in required_ids.items():
+            for field_id in sorted(field_ids):
+                with self.subTest(filename=filename, field_id=field_id), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    labels = _copy_issue_form_fixture(root)
+                    form_path = (
+                        root / ".github" / "ISSUE_TEMPLATE" / filename
+                    )
+                    document = _load_form_document(form_path)
+                    body = document["body"]
+                    self.assertIsInstance(body, list)
+                    field = next(
+                        element
+                        for element in body
+                        if isinstance(element, dict)
+                        and element.get("id") == field_id
+                    )
+                    validations = field["validations"]
+                    self.assertIsInstance(validations, dict)
+                    validations["required"] = False
+                    _write_form_document(form_path, document)
+
+                    errors = validate_issue_forms(root, labels)
+
+                    self.assertIn(
+                        f"{form_path}: required field {field_id} must exist "
+                        "and set validations.required to true",
+                        errors,
+                    )
 
     def test_issue_chooser_scope_includes_every_public_form_category(self) -> None:
         config = load_yaml(ROOT / ".github" / "ISSUE_TEMPLATE" / "config.yml")

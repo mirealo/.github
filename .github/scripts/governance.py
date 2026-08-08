@@ -78,6 +78,79 @@ SUPPORTED_BODY_TYPES = {
     "checkboxes",
     "upload",
 }
+ISSUE_FORM_ELEMENT_KEYS = frozenset(
+    {"type", "id", "attributes", "validations"}
+)
+ISSUE_FORM_ATTRIBUTE_KEYS = {
+    "markdown": frozenset({"value"}),
+    "input": frozenset({"label", "description", "placeholder", "value"}),
+    "textarea": frozenset(
+        {"label", "description", "placeholder", "value", "render"}
+    ),
+    "dropdown": frozenset(
+        {"label", "description", "multiple", "options", "default"}
+    ),
+    "checkboxes": frozenset({"label", "description", "options"}),
+    "upload": frozenset({"label", "description"}),
+}
+ISSUE_FORM_TEXT_ATTRIBUTES = {
+    "input": frozenset({"description", "placeholder", "value"}),
+    "textarea": frozenset(
+        {"description", "placeholder", "value", "render"}
+    ),
+    "dropdown": frozenset({"description"}),
+    "checkboxes": frozenset({"description"}),
+    "upload": frozenset({"description"}),
+}
+REQUIRED_FORM_FIELD_IDS = {
+    "01-bug-report.yml": frozenset(
+        {
+            "component",
+            "version",
+            "impact",
+            "regression",
+            "reproducibility",
+            "expected_behavior",
+            "actual_behavior",
+            "reproduction_steps",
+            "minimal_reproduction",
+            "environment",
+        }
+    ),
+    "02-feature-proposal.yml": frozenset(
+        {
+            "problem",
+            "users_and_use_case",
+            "desired_outcome",
+            "acceptance_criteria",
+            "scope_and_non_goals",
+            "workaround",
+            "alternatives",
+            "implications",
+        }
+    ),
+    "03-documentation-issue.yml": frozenset(
+        {
+            "location",
+            "category",
+            "audience",
+            "problem",
+            "expected_content",
+            "references",
+        }
+    ),
+    "04-maintenance-proposal.yml": frozenset(
+        {
+            "problem",
+            "outcome",
+            "scope",
+            "acceptance_criteria",
+            "implications",
+            "validation",
+            "alternatives",
+        }
+    ),
+}
 FIELD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 YAML_PROFILE_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 YAML_PROFILE_MAPPING_PATTERN = re.compile(
@@ -741,6 +814,213 @@ def validate_label_manifest(path: Path) -> tuple[LabelDefinition, ...]:
     return tuple(labels)
 
 
+def _validate_issue_form_body(
+    path: Path,
+    filename: str,
+    body: list[object],
+) -> list[str]:
+    errors: list[str] = []
+    if not any(
+        isinstance(element, dict)
+        and element.get("type") in SUPPORTED_BODY_TYPES - {"markdown"}
+        for element in body
+    ):
+        errors.append(
+            f"{path}: body must contain at least one non-markdown field"
+        )
+
+    field_ids: set[str] = set()
+    field_labels: set[str] = set()
+    fields_by_id: dict[str, list[dict[str, object]]] = {}
+    for index, element in enumerate(body):
+        context = f"{path}: body[{index}]"
+        if not isinstance(element, dict):
+            errors.append(f"{context}: element must be a mapping")
+            continue
+
+        for key in sorted(set(element) - ISSUE_FORM_ELEMENT_KEYS):
+            errors.append(f"{context}: unsupported element key: {key}")
+
+        body_type = element.get("type")
+        if (
+            not isinstance(body_type, str)
+            or body_type not in SUPPORTED_BODY_TYPES
+        ):
+            errors.append(f"{context}: unsupported body type: {body_type}")
+
+        field_id = element.get("id")
+        if body_type == "markdown":
+            if "id" in element:
+                errors.append(f"{context}: markdown must not define an id")
+            if "validations" in element:
+                errors.append(
+                    f"{context}: markdown must not define validations"
+                )
+        else:
+            if (
+                not isinstance(field_id, str)
+                or not FIELD_ID_PATTERN.fullmatch(field_id)
+            ):
+                errors.append(f"{context}: invalid field id: {field_id}")
+            elif field_id in field_ids:
+                errors.append(f"{path}: duplicate field id: {field_id}")
+            else:
+                field_ids.add(field_id)
+            if isinstance(field_id, str):
+                fields_by_id.setdefault(field_id, []).append(element)
+
+        attributes = element.get("attributes")
+        if not isinstance(attributes, dict):
+            errors.append(f"{context}: attributes must be a mapping")
+        elif isinstance(body_type, str) and body_type in SUPPORTED_BODY_TYPES:
+            allowed_attributes = ISSUE_FORM_ATTRIBUTE_KEYS[body_type]
+            for key in sorted(set(attributes) - allowed_attributes):
+                errors.append(
+                    f"{context}: unsupported {body_type} attribute key: {key}"
+                )
+
+            if body_type == "markdown":
+                value = attributes.get("value")
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(
+                        f"{context}: markdown value must be a non-empty string"
+                    )
+            else:
+                label = attributes.get("label")
+                if not isinstance(label, str) or not label.strip():
+                    errors.append(
+                        f"{context}: {body_type} label must be a non-empty string"
+                    )
+                elif label in field_labels:
+                    errors.append(f"{path}: duplicate field label: {label}")
+                else:
+                    field_labels.add(label)
+
+                for key in ISSUE_FORM_TEXT_ATTRIBUTES.get(body_type, ()):
+                    if key in attributes and not isinstance(attributes[key], str):
+                        errors.append(
+                            f"{context}: {body_type} attribute {key} must be a string"
+                        )
+
+                if body_type == "dropdown":
+                    options = attributes.get("options")
+                    valid_options = (
+                        isinstance(options, list)
+                        and bool(options)
+                        and all(isinstance(option, str) for option in options)
+                        and len(set(options)) == len(options)
+                    )
+                    if not valid_options:
+                        errors.append(
+                            f"{context}: dropdown options must be a non-empty "
+                            "list of distinct strings"
+                        )
+                    multiple = attributes.get("multiple")
+                    if "multiple" in attributes and not isinstance(
+                        multiple, bool
+                    ):
+                        errors.append(
+                            f"{context}: dropdown multiple must be a Boolean"
+                        )
+                    default = attributes.get("default")
+                    if "default" in attributes and not (
+                        isinstance(default, int)
+                        and not isinstance(default, bool)
+                        and valid_options
+                        and 0 <= default < len(options)
+                    ):
+                        errors.append(
+                            f"{context}: dropdown default must be a valid "
+                            "non-Boolean option index"
+                        )
+
+                if body_type == "checkboxes":
+                    options = attributes.get("options")
+                    if (
+                        not isinstance(options, list)
+                        or not options
+                        or not all(isinstance(option, dict) for option in options)
+                    ):
+                        errors.append(
+                            f"{context}: checkboxes options must be a non-empty "
+                            "list of mappings"
+                        )
+                    else:
+                        option_labels: set[str] = set()
+                        invalid_option_label = False
+                        for option in options:
+                            for key in sorted(
+                                set(option) - {"label", "required"}
+                            ):
+                                errors.append(
+                                    f"{context}: checkbox option keys must be "
+                                    "limited to label and required"
+                                )
+                            option_label = option.get("label")
+                            if (
+                                not isinstance(option_label, str)
+                                or not option_label.strip()
+                                or option_label in option_labels
+                            ):
+                                invalid_option_label = True
+                            else:
+                                option_labels.add(option_label)
+                            if "required" in option and not isinstance(
+                                option["required"], bool
+                            ):
+                                errors.append(
+                                    f"{context}: checkbox option required must "
+                                    "be a Boolean"
+                                )
+                        if invalid_option_label:
+                            errors.append(
+                                f"{context}: checkbox option labels must be "
+                                "non-empty distinct strings"
+                            )
+
+        validations = element.get("validations")
+        if body_type != "markdown":
+            if validations is not None and not isinstance(validations, dict):
+                errors.append(f"{context}: validations must be a mapping")
+            elif isinstance(validations, dict):
+                allowed_validations = {"required"}
+                if body_type == "upload":
+                    allowed_validations.add("accept")
+                for key in sorted(set(validations) - allowed_validations):
+                    errors.append(
+                        f"{context}: unsupported {body_type} validation key: {key}"
+                    )
+                if "required" in validations and not isinstance(
+                    validations["required"], bool
+                ):
+                    errors.append(
+                        f"{context}: validations.required must be a Boolean"
+                    )
+                if (
+                    body_type == "upload"
+                    and "accept" in validations
+                    and not isinstance(validations["accept"], str)
+                ):
+                    errors.append(f"{context}: upload accept must be a string")
+
+    for field_id in sorted(REQUIRED_FORM_FIELD_IDS.get(filename, ())):
+        matches = fields_by_id.get(field_id, [])
+        if len(matches) != 1:
+            required = False
+        else:
+            validations = matches[0].get("validations")
+            required = (
+                isinstance(validations, dict)
+                and validations.get("required") is True
+            )
+        if not required:
+            errors.append(
+                f"{path}: required field {field_id} must exist and set "
+                "validations.required to true"
+            )
+    return errors
+
+
 def validate_issue_forms(
     root: Path,
     labels: tuple[LabelDefinition, ...],
@@ -818,36 +1098,7 @@ def validate_issue_forms(
         if not isinstance(body, list):
             errors.append(f"{path}: body must be a list")
             continue
-        field_ids: set[str] = set()
-        for index, element in enumerate(body):
-            context = f"{path}: body[{index}]"
-            if not isinstance(element, dict):
-                errors.append(f"{context}: element must be a mapping")
-                continue
-            body_type = element.get("type")
-            if (
-                not isinstance(body_type, str)
-                or body_type not in SUPPORTED_BODY_TYPES
-            ):
-                errors.append(f"{context}: unsupported body type: {body_type}")
-            field_id = element.get("id")
-            if body_type == "markdown" and field_id is not None:
-                errors.append(f"{context}: markdown must not define an id")
-            elif body_type != "markdown":
-                if (
-                    not isinstance(field_id, str)
-                    or not FIELD_ID_PATTERN.fullmatch(field_id)
-                ):
-                    errors.append(f"{context}: invalid field id: {field_id}")
-                elif field_id in field_ids:
-                    errors.append(f"{path}: duplicate field id: {field_id}")
-                else:
-                    field_ids.add(field_id)
-            if not isinstance(element.get("attributes"), dict):
-                errors.append(f"{context}: attributes must be a mapping")
-            validations = element.get("validations")
-            if validations is not None and not isinstance(validations, dict):
-                errors.append(f"{context}: validations must be a mapping")
+        errors.extend(_validate_issue_form_body(path, filename, body))
 
     config_path = template_dir / "config.yml"
     try:
@@ -1078,13 +1329,22 @@ def _tracked_policy_files(root: Path) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(paths))
 
 
-def _validate_text_file(root: Path, relative: Path) -> list[str]:
-    errors: list[str] = []
+def _read_utf8_text(
+    root: Path,
+    relative: Path,
+) -> tuple[str | None, str | None]:
     path = root / relative
     if not path.is_file():
-        return [f"missing required file: {relative.as_posix()}"]
-    text = path.read_text(encoding="utf-8")
-    if path.suffix != ".py" and PLACEHOLDER_PATTERN.search(text):
+        return None, f"missing required file: {relative.as_posix()}"
+    try:
+        return path.read_text(encoding="utf-8"), None
+    except (OSError, UnicodeError):
+        return None, f"{relative.as_posix()}: unable to read as UTF-8"
+
+
+def _validate_text_file(relative: Path, text: str) -> list[str]:
+    errors: list[str] = []
+    if relative.suffix != ".py" and PLACEHOLDER_PATTERN.search(text):
         errors.append(f"{relative}: placeholder or conflict marker")
     for number, line in enumerate(text.splitlines(), start=1):
         if line != line.rstrip():
@@ -1094,12 +1354,15 @@ def _validate_text_file(root: Path, relative: Path) -> list[str]:
     return errors
 
 
-def _validate_markdown_links(root: Path, relative: Path) -> list[str]:
+def _validate_markdown_links(
+    root: Path,
+    relative: Path,
+    text: str,
+) -> list[str]:
     errors: list[str] = []
     path = root / relative
-    if not path.is_file() or path.suffix.lower() != ".md":
+    if path.suffix.lower() != ".md":
         return errors
-    text = path.read_text(encoding="utf-8")
     for match in MARKDOWN_LINK_PATTERN.finditer(text):
         target = match.group(1).strip()
         if target.startswith(("http://", "https://", "mailto:", "#")):
@@ -1118,13 +1381,13 @@ def _validate_markdown_links(root: Path, relative: Path) -> list[str]:
     return errors
 
 
-def _validate_policy_headings(root: Path) -> list[str]:
+def _validate_policy_headings(texts: dict[Path, str]) -> list[str]:
     errors: list[str] = []
     for relative, headings in REQUIRED_POLICY_HEADINGS.items():
-        path = root / relative
-        if not path.is_file():
+        text = texts.get(relative)
+        if text is None:
             continue
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = text.splitlines()
         for heading in headings:
             if heading not in lines:
                 errors.append(f"{relative}: missing heading: {heading}")
@@ -1133,15 +1396,22 @@ def _validate_policy_headings(root: Path) -> list[str]:
 
 def validate_community_files(root: Path) -> list[str]:
     errors: list[str] = []
+    texts: dict[Path, str] = {}
     for relative in _tracked_policy_files(root):
-        errors.extend(_validate_text_file(root, relative))
-        errors.extend(_validate_markdown_links(root, relative))
-    codeowners_path = root / ".github" / "CODEOWNERS"
-    if codeowners_path.is_file():
-        codeowners = codeowners_path.read_text(encoding="utf-8")
+        text, read_error = _read_utf8_text(root, relative)
+        if read_error is not None:
+            errors.append(read_error)
+            continue
+        if text is None:
+            continue
+        texts[relative] = text
+        errors.extend(_validate_text_file(relative, text))
+        errors.extend(_validate_markdown_links(root, relative, text))
+    codeowners = texts.get(Path(".github/CODEOWNERS"))
+    if codeowners is not None:
         if not CODEOWNERS_WILDCARD_PATTERN.search(codeowners):
             errors.append(".github/CODEOWNERS: wildcard owner is required")
-    errors.extend(_validate_policy_headings(root))
+    errors.extend(_validate_policy_headings(texts))
     return errors
 
 
