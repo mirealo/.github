@@ -2575,6 +2575,263 @@ class RetirementPreflightTests(unittest.TestCase):
                 sync_labels.validate_retirement_preflight_v1(expected, remote)
 
 
+class RetirementSafetyTests(unittest.TestCase):
+    def _sync_module(self):
+        try:
+            return importlib.import_module("sync_labels")
+        except ModuleNotFoundError:
+            self.fail("sync_labels CLI module is missing")
+
+    @staticmethod
+    def _count_json(count: object = 0, incomplete: object = False) -> str:
+        return json.dumps({"total_count": count, "incomplete_results": incomplete})
+
+    @staticmethod
+    def _search_command(label_name: str, item_type: str) -> list[str]:
+        return [
+            "api",
+            "--hostname",
+            "github.com",
+            "--method",
+            "GET",
+            "/search/issues",
+            "--header",
+            "X-GitHub-Api-Version: 2026-03-10",
+            "--field",
+            (
+                f'q=repo:mirealo/.github is:{item_type} '
+                f'label:"{label_name}"'
+            ),
+            "--field",
+            "per_page=1",
+            "--jq",
+            "{total_count, incomplete_results}",
+        ]
+
+    @staticmethod
+    def _delete_command(label_name: str) -> list[str]:
+        return [
+            "label",
+            "delete",
+            label_name,
+            "--repo",
+            "github.com/mirealo/.github",
+            "--yes",
+        ]
+
+    @staticmethod
+    def _zero_proof(sync_labels):
+        return sync_labels.RetirementUsageProofV1(
+            "mirealo/.github",
+            tuple(
+                sync_labels.LabelUsageV1(label, 0, 0)
+                for label in sync_labels.OBSOLETE_LABELS_V1
+            ),
+        )
+
+    def test_usage_proof_is_all_state_complete_and_host_bound(self) -> None:
+        sync_labels = self._sync_module()
+        observed: list[tuple[list[str], str | None, object]] = []
+
+        def fake_run(command: list[str], **kwargs: object):
+            observed.append(
+                (command, os.environ.get("GH_HOST"), kwargs.get("env"))
+            )
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=self._count_json(),
+                stderr="",
+            )
+
+        with (
+            patch.dict(os.environ, {"GH_HOST": "example.invalid"}),
+            patch.object(sync_labels.subprocess, "run", side_effect=fake_run),
+        ):
+            proof = sync_labels.prove_retirement_labels_unused_v1("mirealo/.github")
+
+        expected = [
+            ["gh", *self._search_command(label.name, item_type)]
+            for label in sync_labels.OBSOLETE_LABELS_V1
+            for item_type in ("issue", "pr")
+        ]
+        self.assertEqual(
+            [command for command, _host, _env in observed], expected
+        )
+        self.assertTrue(
+            all(host == "example.invalid" for _command, host, _env in observed)
+        )
+        self.assertTrue(all(env is None for _command, _host, env in observed))
+        self.assertTrue(
+            all(
+                " is:open" not in " ".join(command)
+                and " is:closed" not in " ".join(command)
+                for command in expected
+            )
+        )
+        self.assertEqual(
+            tuple(result.label for result in proof.results),
+            sync_labels.OBSOLETE_LABELS_V1,
+        )
+
+    def test_usage_proof_rejects_any_all_state_use(self) -> None:
+        sync_labels = self._sync_module()
+        label = sync_labels.OBSOLETE_LABELS_V1[0]
+        with (
+            patch.object(
+                sync_labels,
+                "run_gh",
+                side_effect=[self._count_json(), self._count_json(1)],
+            ) as run_gh,
+            self.assertRaisesRegex(
+                GovernanceError,
+                r"used by 0 issue\(s\) and 1 pull request\(s\)",
+            ),
+        ):
+            sync_labels.prove_retirement_labels_unused_v1("mirealo/.github")
+        self.assertEqual(
+            run_gh.call_args_list,
+            [
+                call(self._search_command(label.name, "issue")),
+                call(self._search_command(label.name, "pr")),
+            ],
+        )
+
+    def test_usage_proof_fails_closed_on_transport_or_schema_ambiguity(
+        self,
+    ) -> None:
+        sync_labels = self._sync_module()
+        fixtures = (
+            ("invalid JSON", "{", "invalid JSON"),
+            ("non-object", "[]", "did not return an object"),
+            ("missing field", '{"total_count": 0}', "ambiguous result"),
+            ("boolean count", self._count_json(True), "ambiguous result"),
+            ("negative count", self._count_json(-1), "ambiguous result"),
+            ("incomplete", self._count_json(0, True), "ambiguous result"),
+            (
+                "transport",
+                GovernanceError("transport failed"),
+                "transport failed",
+            ),
+        )
+        for name, response, message in fixtures:
+            kwargs = (
+                {"side_effect": response}
+                if isinstance(response, BaseException)
+                else {"return_value": response}
+            )
+            with (
+                self.subTest(name=name),
+                patch.object(sync_labels, "run_gh", **kwargs) as run_gh,
+                self.assertRaisesRegex(GovernanceError, message),
+            ):
+                sync_labels.prove_retirement_labels_unused_v1("mirealo/.github")
+            self.assertEqual(run_gh.call_count, 1)
+
+    def test_usage_queries_reject_wrong_scope_before_transport(self) -> None:
+        sync_labels = self._sync_module()
+        with patch.object(sync_labels, "run_gh") as run_gh:
+            with self.assertRaisesRegex(
+                GovernanceError,
+                "refusing an unapproved label retirement",
+            ):
+                sync_labels.prove_retirement_labels_unused_v1("mirealo/example")
+            with self.assertRaisesRegex(
+                GovernanceError,
+                "refusing an unapproved label-usage query",
+            ):
+                sync_labels._read_retirement_label_use_count_v1(
+                    RemoteLabel("arbitrary", "000000", "Arbitrary."),
+                    "issue",
+                )
+        run_gh.assert_not_called()
+
+    def test_deletion_is_proof_gated_ordered_and_host_bound(self) -> None:
+        sync_labels = self._sync_module()
+        observed: list[tuple[list[str], str | None, object]] = []
+
+        def fake_run(command: list[str], **kwargs: object):
+            observed.append(
+                (command, os.environ.get("GH_HOST"), kwargs.get("env"))
+            )
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with (
+            patch.dict(os.environ, {"GH_HOST": "example.invalid"}),
+            patch.object(sync_labels.subprocess, "run", side_effect=fake_run),
+        ):
+            sync_labels.delete_retirement_labels_v1(self._zero_proof(sync_labels))
+
+        self.assertEqual(
+            [command for command, _host, _env in observed],
+            [
+                ["gh", *self._delete_command(label.name)]
+                for label in sync_labels.OBSOLETE_LABELS_V1
+            ],
+        )
+        self.assertTrue(
+            all(host == "example.invalid" for _command, host, _env in observed)
+        )
+        self.assertTrue(all(env is None for _command, _host, env in observed))
+
+    def test_deletion_rejects_incomplete_tampered_or_nonzero_proof(self) -> None:
+        sync_labels = self._sync_module()
+        proof = self._zero_proof(sync_labels)
+        results = proof.results
+        invalid = (
+            sync_labels.RetirementUsageProofV1(proof.repository, results[:-1]),
+            sync_labels.RetirementUsageProofV1(
+                proof.repository,
+                (
+                    sync_labels.LabelUsageV1(
+                        RemoteLabel("arbitrary", "000000", "Arbitrary."),
+                        0,
+                        0,
+                    ),
+                )
+                + results[1:],
+            ),
+            sync_labels.RetirementUsageProofV1(
+                proof.repository,
+                (sync_labels.LabelUsageV1(results[0].label, 1, 0),)
+                + results[1:],
+            ),
+            sync_labels.RetirementUsageProofV1("mirealo/example", results),
+            object(),
+        )
+        with patch.object(sync_labels, "run_gh") as run_gh:
+            for candidate in invalid:
+                with (
+                    self.subTest(candidate=candidate),
+                    self.assertRaisesRegex(
+                        GovernanceError,
+                        "complete zero-use proof",
+                    ),
+                ):
+                    sync_labels.delete_retirement_labels_v1(candidate)
+        run_gh.assert_not_called()
+
+    def test_deletion_stops_on_first_command_failure(self) -> None:
+        sync_labels = self._sync_module()
+        labels = sync_labels.OBSOLETE_LABELS_V1
+        with (
+            patch.object(
+                sync_labels,
+                "run_gh",
+                side_effect=["", GovernanceError("delete failed")],
+            ) as run_gh,
+            self.assertRaisesRegex(GovernanceError, "delete failed"),
+        ):
+            sync_labels.delete_retirement_labels_v1(self._zero_proof(sync_labels))
+        self.assertEqual(
+            run_gh.call_args_list,
+            [
+                call(self._delete_command(labels[0].name)),
+                call(self._delete_command(labels[1].name)),
+            ],
+        )
+
+
 class SyncCliContractTests(unittest.TestCase):
     def _sync_module(self):
         try:

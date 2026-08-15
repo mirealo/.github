@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from governance import (
@@ -61,6 +62,19 @@ OBSOLETE_LABELS_V1 = (
         "Closed because the requested work is not planned.",
     ),
 )
+
+
+@dataclass(frozen=True)
+class LabelUsageV1:
+    label: RemoteLabel
+    issues: int
+    pull_requests: int
+
+
+@dataclass(frozen=True)
+class RetirementUsageProofV1:
+    repository: str
+    results: tuple[LabelUsageV1, ...]
 
 
 def repository_name(value: str) -> str:
@@ -133,6 +147,120 @@ def retirement_repository_target(repository: str) -> str:
 
 def read_retirement_labels_v1(repository: str) -> tuple[RemoteLabel, ...]:
     return read_remote_labels(retirement_repository_target(repository))
+
+
+def _read_retirement_label_use_count_v1(
+    label: RemoteLabel,
+    item_type: str,
+) -> int:
+    if label not in OBSOLETE_LABELS_V1 or item_type not in {"issue", "pr"}:
+        raise GovernanceError("refusing an unapproved label-usage query")
+    output = run_gh(
+        [
+            "api",
+            "--hostname",
+            GITHUB_HOSTNAME,
+            "--method",
+            "GET",
+            "/search/issues",
+            "--header",
+            "X-GitHub-Api-Version: 2026-03-10",
+            "--field",
+            (
+                f'q=repo:{RETIREMENT_REPOSITORY} is:{item_type} '
+                f'label:"{label.name}"'
+            ),
+            "--field",
+            "per_page=1",
+            "--jq",
+            "{total_count, incomplete_results}",
+        ]
+    )
+    try:
+        result = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise GovernanceError(
+            "GitHub label-usage search returned invalid JSON"
+        ) from error
+    if not isinstance(result, dict):
+        raise GovernanceError(
+            "GitHub label-usage search did not return an object"
+        )
+    count = result.get("total_count")
+    if (
+        set(result) != {"total_count", "incomplete_results"}
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+        or result.get("incomplete_results") is not False
+    ):
+        raise GovernanceError(
+            "GitHub label-usage search returned an ambiguous result"
+        )
+    return count
+
+
+def prove_retirement_labels_unused_v1(
+    repository: str,
+) -> RetirementUsageProofV1:
+    retirement_repository_target(repository)
+    results: list[LabelUsageV1] = []
+    for label in OBSOLETE_LABELS_V1:
+        usage = LabelUsageV1(
+            label=label,
+            issues=_read_retirement_label_use_count_v1(label, "issue"),
+            pull_requests=_read_retirement_label_use_count_v1(label, "pr"),
+        )
+        if usage.issues or usage.pull_requests:
+            raise GovernanceError(
+                f"refusing to retire {label.name!r}: used by "
+                f"{usage.issues} issue(s) and "
+                f"{usage.pull_requests} pull request(s)"
+            )
+        results.append(usage)
+    return RetirementUsageProofV1(repository, tuple(results))
+
+
+def _validate_retirement_usage_proof_v1(
+    proof: object,
+) -> tuple[LabelUsageV1, ...]:
+    error = "refusing deletion without a complete zero-use proof"
+    if not isinstance(proof, RetirementUsageProofV1):
+        raise GovernanceError(error)
+    if not isinstance(proof.results, tuple) or not all(
+        isinstance(result, LabelUsageV1) for result in proof.results
+    ):
+        raise GovernanceError(error)
+    expected = tuple(OBSOLETE_LABELS_V1)
+    actual = tuple(result.label for result in proof.results)
+    counts_are_zero = all(
+        type(count) is int and count == 0
+        for result in proof.results
+        for count in (result.issues, result.pull_requests)
+    )
+    if (
+        proof.repository != RETIREMENT_REPOSITORY
+        or actual != expected
+        or not counts_are_zero
+    ):
+        raise GovernanceError(error)
+    return proof.results
+
+
+def delete_retirement_labels_v1(proof: object) -> None:
+    results = _validate_retirement_usage_proof_v1(proof)
+    target = retirement_repository_target(RETIREMENT_REPOSITORY)
+    for result in results:
+        run_gh(
+            [
+                "label",
+                "delete",
+                result.label.name,
+                "--repo",
+                target,
+                "--yes",
+            ]
+        )
 
 
 def report(drift: LabelDrift) -> None:
