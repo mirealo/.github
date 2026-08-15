@@ -63,6 +63,15 @@ class _FakeResponse:
         return b"x"
 
 
+def _copy_monitor_workflow(root: Path) -> None:
+    target = root / ".github" / "workflows" / "governance-monitor.yml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(
+        ROOT / ".github" / "workflows" / "governance-monitor.yml",
+        target,
+    )
+
+
 def _copy_issue_form_fixture(root: Path) -> tuple[LabelDefinition, ...]:
     shutil.copytree(
         ROOT / ".github" / "ISSUE_TEMPLATE",
@@ -1226,6 +1235,7 @@ run: |
         paths = (
             ROOT / ".github" / "labels.yml",
             ROOT / ".github" / "dependabot.yml",
+            ROOT / ".github" / "workflows" / "governance-monitor.yml",
             ROOT / ".github" / "workflows" / "governance.yml",
             ROOT / ".github" / "ISSUE_TEMPLATE" / "config.yml",
             ROOT / ".github" / "ISSUE_TEMPLATE" / "01-bug-report.yml",
@@ -1478,6 +1488,7 @@ class AutomationPolicyTests(unittest.TestCase):
             root = Path(directory)
             workflow = root / ".github" / "workflows" / "governance.yml"
             workflow.parent.mkdir(parents=True)
+            _copy_monitor_workflow(root)
             workflow.write_text(
                 (ROOT / ".github" / "workflows" / "governance.yml")
                 .read_text(encoding="utf-8")
@@ -1507,6 +1518,7 @@ class AutomationPolicyTests(unittest.TestCase):
             root = Path(directory)
             workflow = root / ".github" / "workflows" / "governance.yml"
             workflow.parent.mkdir(parents=True)
+            _copy_monitor_workflow(root)
             workflow.write_text(
                 """
 name: Governance
@@ -1562,7 +1574,7 @@ updates:
             errors = validate_automation(root, labels)
             self.assertTrue(any("action reference must use a full SHA" in error for error in errors))
             self.assertTrue(
-                any("workflow files must equal ['governance.yml']" in error for error in errors)
+                any("workflow files must equal" in error for error in errors)
             )
 
     def test_expression_in_run_script_is_rejected(self) -> None:
@@ -1570,6 +1582,7 @@ updates:
             root = Path(directory)
             workflow = root / ".github" / "workflows" / "governance.yml"
             workflow.parent.mkdir(parents=True)
+            _copy_monitor_workflow(root)
             workflow.write_text(
                 """
 name: Governance
@@ -1620,6 +1633,55 @@ updates:
             )
             errors = validate_automation(root, labels)
             self.assertTrue(any("GitHub expression in run script" in error for error in errors))
+
+    def test_monitor_rejects_non_main_or_write_enabled_variants(self) -> None:
+        cases = (
+            (
+                "missing event-ref guard",
+                "    if: github.ref == 'refs/heads/main'\n",
+                "",
+            ),
+            ("non-main checkout", "ref: main", "ref: feature"),
+            ("write permission", "issues: read", "issues: write"),
+            (
+                "pull request trigger",
+                "  workflow_dispatch:",
+                "  pull_request:\n  workflow_dispatch:",
+            ),
+        )
+        for case_name, old, new in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                shutil.copytree(
+                    ROOT / ".github" / "workflows",
+                    root / ".github" / "workflows",
+                )
+                shutil.copy(
+                    ROOT / ".github" / "dependabot.yml",
+                    root / ".github" / "dependabot.yml",
+                )
+                monitor = (
+                    root
+                    / ".github"
+                    / "workflows"
+                    / "governance-monitor.yml"
+                )
+                monitor.write_text(
+                    monitor.read_text(encoding="utf-8").replace(old, new, 1),
+                    encoding="utf-8",
+                )
+                labels = validate_label_manifest(
+                    ROOT / ".github" / "labels.yml"
+                )
+
+                errors = validate_automation(root, labels)
+
+                self.assertTrue(
+                    any(
+                        "main-only read-only monitoring policy" in error
+                        for error in errors
+                    )
+                )
 
 
 class SensitiveLinkTests(unittest.TestCase):

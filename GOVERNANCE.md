@@ -40,8 +40,10 @@ native Priority field. The native field wins if the two disagree.
 | Low | `priority: low` |
 
 Maintainers apply or correct these projections deliberately. Governance
-automation checks drift but does not mutate labels or native fields with a write
-token.
+automation compares label definitions (name, color, and description) in the
+manifest with repository labels. It does not check whether each issue's native
+Priority field matches its optional public projection, and it does not mutate
+labels or native fields with a write token.
 
 ## Issue lifecycle
 
