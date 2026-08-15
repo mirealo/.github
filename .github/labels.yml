@@ -40,22 +40,6 @@ labels:
     color: b60205
     description: Cannot proceed until a documented dependency or decision is resolved.
     category: status
-  - name: "priority: critical"
-    color: b60205
-    description: Public projection of native Priority Urgent; the native field is authoritative.
-    category: priority
-  - name: "priority: high"
-    color: d93f0b
-    description: Public projection of native Priority High; the native field is authoritative.
-    category: priority
-  - name: "priority: medium"
-    color: fbca04
-    description: Public projection of native Priority Medium; the native field is authoritative.
-    category: priority
-  - name: "priority: low"
-    color: c5def5
-    description: Public projection of native Priority Low; the native field is authoritative.
-    category: priority
   - name: good first issue
     color: 7057ff
     description: Well-scoped work suitable for a first contribution.
@@ -64,15 +48,3 @@ labels:
     color: "008672"
     description: Maintainers welcome a community contribution for this work.
     category: contribution
-  - name: "resolution: duplicate"
-    color: cfd3d7
-    description: Closed because equivalent work is already tracked elsewhere.
-    category: resolution
-  - name: "resolution: not-actionable"
-    color: cfd3d7
-    description: Closed because the report is incomplete, unsupported, or outside scope.
-    category: resolution
-  - name: "resolution: not-planned"
-    color: cfd3d7
-    description: Closed because the requested work is not planned.
-    category: resolution

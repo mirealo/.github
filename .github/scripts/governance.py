@@ -19,22 +19,7 @@ EXPECTED_NAMES_BY_CATEGORY = {
             "status: blocked",
         }
     ),
-    "priority": frozenset(
-        {
-            "priority: critical",
-            "priority: high",
-            "priority: medium",
-            "priority: low",
-        }
-    ),
     "contribution": frozenset({"good first issue", "help wanted"}),
-    "resolution": frozenset(
-        {
-            "resolution: duplicate",
-            "resolution: not-actionable",
-            "resolution: not-planned",
-        }
-    ),
 }
 ALLOWED_CATEGORIES = set(EXPECTED_NAMES_BY_CATEGORY)
 COLOR_PATTERN = re.compile(r"^[0-9a-f]{6}$")

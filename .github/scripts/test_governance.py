@@ -319,17 +319,19 @@ class PolicyStructureTests(unittest.TestCase):
 
     def test_solo_maintainer_and_issue_authority_are_explicit(self) -> None:
         governance = (ROOT / "GOVERNANCE.md").read_text(encoding="utf-8")
+        normalized_governance = " ".join(governance.split())
         for statement in (
             "Native Issue Type",
-            "The native field wins if the two disagree.",
-            "| Urgent | `priority: critical` |",
+            "The native Priority field is the sole public priority authority.",
+            "`Urgent`, `High`, `Medium`, and `Low`",
+            "Native close reasons replace resolution labels.",
             "Required human approvals, code-owner review, and",
             "last-push approval remain at zero",
             "must require one approving review, code-owner review, and",
             "described as independent human approval.",
         ):
             with self.subTest(statement=statement):
-                self.assertIn(statement, governance)
+                self.assertIn(statement, normalized_governance)
 
         conduct = (ROOT / "CODE_OF_CONDUCT.md").read_text(encoding="utf-8")
         for statement in (
@@ -1251,7 +1253,7 @@ run: |
 class LabelManifestTests(unittest.TestCase):
     def test_repository_manifest_is_exact_and_valid(self) -> None:
         labels = validate_label_manifest(ROOT / ".github" / "labels.yml")
-        self.assertEqual(len(labels), 19)
+        self.assertEqual(len(labels), 12)
         self.assertEqual(
             {label.name for label in labels},
             {
@@ -1265,20 +1267,13 @@ class LabelManifestTests(unittest.TestCase):
                 "status: accepted",
                 "status: in-progress",
                 "status: blocked",
-                "priority: critical",
-                "priority: high",
-                "priority: medium",
-                "priority: low",
                 "good first issue",
                 "help wanted",
-                "resolution: duplicate",
-                "resolution: not-actionable",
-                "resolution: not-planned",
             },
         )
         self.assertEqual(
             {label.category for label in labels},
-            {"work", "status", "priority", "contribution", "resolution"},
+            {"work", "status", "contribution"},
         )
         self.assertEqual(
             [
@@ -1352,30 +1347,6 @@ class LabelManifestTests(unittest.TestCase):
                     "status",
                 ),
                 (
-                    "priority: critical",
-                    "b60205",
-                    "Public projection of native Priority Urgent; the native field is authoritative.",
-                    "priority",
-                ),
-                (
-                    "priority: high",
-                    "d93f0b",
-                    "Public projection of native Priority High; the native field is authoritative.",
-                    "priority",
-                ),
-                (
-                    "priority: medium",
-                    "fbca04",
-                    "Public projection of native Priority Medium; the native field is authoritative.",
-                    "priority",
-                ),
-                (
-                    "priority: low",
-                    "c5def5",
-                    "Public projection of native Priority Low; the native field is authoritative.",
-                    "priority",
-                ),
-                (
                     "good first issue",
                     "7057ff",
                     "Well-scoped work suitable for a first contribution.",
@@ -1386,24 +1357,6 @@ class LabelManifestTests(unittest.TestCase):
                     "008672",
                     "Maintainers welcome a community contribution for this work.",
                     "contribution",
-                ),
-                (
-                    "resolution: duplicate",
-                    "cfd3d7",
-                    "Closed because equivalent work is already tracked elsewhere.",
-                    "resolution",
-                ),
-                (
-                    "resolution: not-actionable",
-                    "cfd3d7",
-                    "Closed because the report is incomplete, unsupported, or outside scope.",
-                    "resolution",
-                ),
-                (
-                    "resolution: not-planned",
-                    "cfd3d7",
-                    "Closed because the requested work is not planned.",
-                    "resolution",
                 ),
             ],
         )
