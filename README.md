@@ -36,6 +36,17 @@ and native issue fields are authoritative for issues. The canonical repository
 label data lives in [.github/labels.yml](.github/labels.yml); the governance
 policy defines its narrower public-projection and pull-request roles.
 
+Labels are repository-scoped. A repository that inherits these issue forms must
+also provision the referenced labels. Check a repository without making changes:
+
+```bash
+python3 .github/scripts/sync_labels.py --repo owner/name --check
+```
+
+An explicitly authorized maintainer may replace `--check` with `--apply` to
+create or update labels. The command never deletes labels and refuses to mutate
+when unexpected labels require a human rename decision.
+
 ## Validate a change
 
 Run the same dependency-free checks used by CI:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,23 @@ from governance import (
     validate_label_manifest,
 )
 
-REPOSITORY = "mirealo/.github"
+REPOSITORY_PATTERN = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/"
+    r"[A-Za-z0-9._-]{1,100}$"
+)
+REMOTE_LABEL_LIMIT = 1000
+
+
+def repository_name(value: str) -> str:
+    if (
+        REPOSITORY_PATTERN.fullmatch(value) is None
+        or "--" in value.partition("/")[0]
+        or value.partition("/")[2] in {".", ".."}
+    ):
+        raise argparse.ArgumentTypeError(
+            "repository must be a valid owner/name identifier"
+        )
+    return value
 
 
 def run_gh(arguments: list[str]) -> str:
@@ -36,15 +53,15 @@ def run_gh(arguments: list[str]) -> str:
     return result.stdout
 
 
-def read_remote_labels() -> tuple[RemoteLabel, ...]:
+def read_remote_labels(repository: str) -> tuple[RemoteLabel, ...]:
     output = run_gh(
         [
             "label",
             "list",
             "--repo",
-            REPOSITORY,
+            repository,
             "--limit",
-            "100",
+            str(REMOTE_LABEL_LIMIT),
             "--json",
             "name,color,description",
         ]
@@ -84,14 +101,14 @@ def report(drift: LabelDrift) -> None:
         print("Labels match the canonical manifest.")
 
 
-def create_label(label: LabelDefinition) -> None:
+def create_label(repository: str, label: LabelDefinition) -> None:
     run_gh(
         [
             "label",
             "create",
             label.name,
             "--repo",
-            REPOSITORY,
+            repository,
             "--color",
             label.color,
             "--description",
@@ -100,14 +117,14 @@ def create_label(label: LabelDefinition) -> None:
     )
 
 
-def update_label(label: LabelDefinition) -> None:
+def update_label(repository: str, label: LabelDefinition) -> None:
     run_gh(
         [
             "label",
             "edit",
             label.name,
             "--repo",
-            REPOSITORY,
+            repository,
             "--color",
             label.color,
             "--description",
@@ -118,7 +135,14 @@ def update_label(label: LabelDefinition) -> None:
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=f"Synchronize labels for the fixed repository {REPOSITORY}."
+        description="Compare or synchronize repository labels with the manifest."
+    )
+    parser.add_argument(
+        "--repo",
+        required=True,
+        type=repository_name,
+        metavar="OWNER/NAME",
+        help="Repository whose labels will be inspected.",
     )
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument(
@@ -143,7 +167,7 @@ def main() -> int:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
     try:
-        drift = compare_labels(expected, read_remote_labels())
+        drift = compare_labels(expected, read_remote_labels(arguments.repo))
         report(drift)
         if arguments.check:
             return 0 if drift.clean else 1
@@ -157,10 +181,13 @@ def main() -> int:
             )
             return 2
         for label in drift.create:
-            create_label(label)
+            create_label(arguments.repo, label)
         for label, _current in drift.update:
-            update_label(label)
-        verified = compare_labels(expected, read_remote_labels())
+            update_label(arguments.repo, label)
+        verified = compare_labels(
+            expected,
+            read_remote_labels(arguments.repo),
+        )
         report(verified)
         return 0 if verified.clean else 2
     except GovernanceError as error:
