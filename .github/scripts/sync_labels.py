@@ -478,9 +478,30 @@ def parse_arguments() -> argparse.Namespace:
     modes.add_argument(
         "--apply",
         action="store_true",
-        help="Create or update labels, then verify. Never delete.",
+        help=(
+            "Create or update labels, then verify. Ordinary apply never "
+            "deletes."
+        ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--retire-obsolete-v1",
+        action="store_true",
+        help=(
+            "Retire the fixed native-metadata migration labels. Requires "
+            "--apply and supports only mirealo/.github."
+        ),
+    )
+    arguments = parser.parse_args()
+    if arguments.retire_obsolete_v1 and not arguments.apply:
+        parser.error("--retire-obsolete-v1 requires --apply")
+    if (
+        arguments.retire_obsolete_v1
+        and arguments.repo != RETIREMENT_REPOSITORY
+    ):
+        parser.error(
+            "--retire-obsolete-v1 supports only mirealo/.github"
+        )
+    return arguments
 
 
 def main() -> int:
@@ -492,6 +513,10 @@ def main() -> int:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
     try:
+        if arguments.retire_obsolete_v1:
+            verified = retire_obsolete_labels_v1(arguments.repo, expected)
+            report(verified)
+            return 0 if verified.clean else 2
         drift = compare_labels(expected, read_remote_labels(arguments.repo))
         report(drift)
         if arguments.check:

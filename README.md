@@ -49,9 +49,30 @@ also provision the referenced labels. Check a repository without making changes:
 python3 .github/scripts/sync_labels.py --repo owner/name --check
 ```
 
-An explicitly authorized maintainer may replace `--check` with `--apply` to
-create or update labels. The command never deletes labels and refuses to mutate
-when unexpected labels require a human rename decision.
+An explicitly authorized maintainer may replace `--check` with ordinary
+`--apply` to create or update labels. Ordinary `--apply` never deletes labels
+and refuses to mutate when unexpected labels require a human rename decision.
+
+The one-time native-metadata migration for this repository is deliberately
+separate from normal synchronization:
+
+```bash
+python3 .github/scripts/sync_labels.py --repo mirealo/.github --apply \
+  --retire-obsolete-v1
+```
+
+That bounded mode can retire only the seven frozen legacy labels after proving
+zero issue and pull-request use, exact historical definitions, and an otherwise
+clean 12-label state. It rejects every other repository or extra label. GitHub
+does not provide an atomic search-and-delete transaction, so run the authorized
+migration during a quiet maintenance window and stop if repository activity
+changes. If an interrupted run deleted only the expected prefix, rerun the same
+command: it resumes from that exact state and obtains fresh proof before the
+next deletion. On any command failure, reported drift, unexpected label, or
+out-of-band change, stop and investigate instead of renaming or deleting labels
+manually. Success performs a final readback and exits zero only when the remote
+inventory exactly matches the canonical 12-label manifest and all seven legacy
+labels are absent.
 
 ## Validate a change
 
