@@ -26,6 +26,7 @@ from governance import (
     validate_community_files,
     validate_issue_forms,
     validate_label_manifest,
+    validate_linguist_attributes,
     validate_automation,
     validate_repository,
 )
@@ -327,8 +328,13 @@ class PolicyStructureTests(unittest.TestCase):
             "Native close reasons replace resolution labels.",
             "Required human approvals, code-owner review, and",
             "last-push approval remain at zero",
-            "must require one approving review, code-owner review, and",
+            "must then require one approving review,",
             "described as independent human approval.",
+            "GitHub does not inherit `CODEOWNERS`",
+            "at least two trusted organization owners",
+            "at least two independent secure 2FA methods",
+            "Mirealo does not maintain a permanent emergency bypass.",
+            "private security advisory",
         ):
             with self.subTest(statement=statement):
                 self.assertIn(statement, normalized_governance)
@@ -342,6 +348,28 @@ class PolicyStructureTests(unittest.TestCase):
         ):
             with self.subTest(statement=statement):
                 self.assertIn(statement, conduct)
+
+    def test_linguist_override_is_minimal_and_exact(self) -> None:
+        self.assertEqual(validate_linguist_attributes(ROOT), [])
+        self.assertEqual(
+            (ROOT / ".gitattributes").read_text(encoding="utf-8"),
+            ".github/scripts/*.py -linguist-documentation "
+            "linguist-detectable linguist-language=Python\n",
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".gitattributes").write_text(
+                ".github/** linguist-language=Python\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                validate_linguist_attributes(root),
+                [
+                    ".gitattributes: direct governance scripts must be "
+                    "classified as detectable Python, not documentation"
+                ],
+            )
 
 
 class YamlAdapterTests(unittest.TestCase):
@@ -1639,7 +1667,14 @@ updates:
 
 class SensitiveLinkTests(unittest.TestCase):
     def test_sensitive_link_allowlist_is_fixed_and_https_only(self) -> None:
-        self.assertEqual(len(SENSITIVE_LINKS), 4)
+        self.assertEqual(len(SENSITIVE_LINKS), 5)
+        self.assertIn(
+            (
+                "published conduct policy",
+                "https://github.com/mirealo/.github/blob/main/CODE_OF_CONDUCT.md",
+            ),
+            SENSITIVE_LINKS,
+        )
         for _name, url in SENSITIVE_LINKS:
             with self.subTest(url=url):
                 validate_sensitive_url(url)
@@ -2095,6 +2130,22 @@ class IssueFormTests(unittest.TestCase):
         for category in ("bugs", "features", "documentation", "maintenance"):
             with self.subTest(category=category):
                 self.assertIn(category, about.casefold())
+
+    def test_issue_chooser_links_directly_to_conduct_policy(self) -> None:
+        config = load_yaml(ROOT / ".github" / "ISSUE_TEMPLATE" / "config.yml")
+        self.assertIsInstance(config, dict)
+        conduct_links = [
+            link
+            for link in config.get("contact_links", [])
+            if isinstance(link, dict)
+            and link.get("url")
+            == "https://github.com/mirealo/.github/blob/main/CODE_OF_CONDUCT.md"
+        ]
+        self.assertEqual(len(conduct_links), 1)
+        self.assertIn(
+            "do not publish",
+            str(conduct_links[0].get("about", "")).casefold(),
+        )
 
     def test_maintenance_form_requires_complete_privacy_acknowledgement(self) -> None:
         form = load_yaml(

@@ -37,6 +37,11 @@ close reasons replace priority and resolution labels. The canonical repository
 label data lives in [.github/labels.yml](.github/labels.yml); the governance
 policy defines its workflow, contribution, and pull-request roles.
 
+`CODEOWNERS` is repository-local and is not inherited from this community-health
+repository. Every repository must provision its own ownership file. The
+governance policy also defines continuity and tightly bounded break-glass
+handling without publishing recovery material.
+
 Labels are repository-scoped. A repository that inherits these issue forms must
 also provision the referenced labels. Check a repository without making changes:
 
@@ -59,6 +64,11 @@ python3 .github/scripts/validate_governance.py
 
 The validator requires Python 3.11 or newer and a compatible `yq` command. It
 supports the local Python-`yq` interface and Go-`yq` v4 on GitHub-hosted runners.
+The root `.gitattributes` explicitly classifies direct governance scripts as
+detectable Python rather than documentation. Linguist applies that override
+only after it is committed; live CodeQL language coverage still requires an API
+readback after merge. Recheck the Languages API and retry default setup after
+merge. Advanced setup remains out of scope unless Python is still undetectable.
 
 The read-only Governance monitor runs weekly and on manual dispatch from `main`.
 It compares remote labels with the published manifest and checks a fixed,

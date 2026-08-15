@@ -165,8 +165,16 @@ YAML_PROFILE_FORBIDDEN_NODE_PREFIXES = {
 }
 SECURITY_URL = "https://github.com/mirealo/.github/blob/main/SECURITY.md"
 SUPPORT_URL = "https://github.com/mirealo/.github/blob/main/SUPPORT.md"
+CONDUCT_URL = (
+    "https://github.com/mirealo/.github/blob/main/CODE_OF_CONDUCT.md"
+)
 CONDUCT_EMAIL = "conduct@mirealo.com"
 CONDUCT_MAILTO = f"mailto:{CONDUCT_EMAIL}"
+LINGUIST_ATTRIBUTES_PATH = Path(".gitattributes")
+EXPECTED_LINGUIST_ATTRIBUTES = (
+    ".github/scripts/*.py -linguist-documentation "
+    "linguist-detectable linguist-language=Python\n"
+)
 REQUIRED_COMMUNITY_FILES = (
     Path("README.md"),
     Path("profile/README.md"),
@@ -192,6 +200,8 @@ REQUIRED_POLICY_HEADINGS = {
         "## Issue authority and labels",
         "## Issue lifecycle",
         "## Solo-maintainer bootstrap",
+        "## Ownership continuity",
+        "## Break-glass changes",
         "## Pull requests",
         "## Policy changes",
         "## Security and conduct",
@@ -1169,9 +1179,13 @@ def validate_issue_forms(
             for link in links
             if isinstance(link, dict) and isinstance(link.get("url"), str)
         }
-        if urls != {SECURITY_URL, SUPPORT_URL}:
+        if (
+            len(links) != 3
+            or urls != {SECURITY_URL, SUPPORT_URL, CONDUCT_URL}
+        ):
             errors.append(
-                f"{config_path}: contact links must be exactly security and support"
+                f"{config_path}: contact links must be exactly security, "
+                "support, and conduct"
             )
     return errors
 
@@ -1484,6 +1498,18 @@ def validate_community_files(root: Path) -> list[str]:
     return errors
 
 
+def validate_linguist_attributes(root: Path) -> list[str]:
+    text, read_error = _read_utf8_text(root, LINGUIST_ATTRIBUTES_PATH)
+    if read_error is not None:
+        return [read_error]
+    if text != EXPECTED_LINGUIST_ATTRIBUTES:
+        return [
+            ".gitattributes: direct governance scripts must be classified "
+            "as detectable Python, not documentation"
+        ]
+    return []
+
+
 def validate_repository(root: Path) -> list[str]:
     errors: list[str] = []
     try:
@@ -1493,4 +1519,5 @@ def validate_repository(root: Path) -> list[str]:
     errors.extend(validate_issue_forms(root, labels))
     errors.extend(validate_automation(root, labels))
     errors.extend(validate_community_files(root))
+    errors.extend(validate_linguist_attributes(root))
     return errors
