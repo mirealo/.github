@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import MagicMock, call, patch
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parents[1]
@@ -29,9 +29,38 @@ from governance import (
     validate_automation,
     validate_repository,
 )
+from check_sensitive_links import (
+    REQUEST_TIMEOUT_SECONDS,
+    SENSITIVE_LINKS,
+    check_sensitive_links,
+    validate_sensitive_url,
+)
 
 
 _MISSING = object()
+
+
+class _FakeResponse:
+    def __init__(self, url: str, status: int = 200) -> None:
+        self.url = url
+        self.status = status
+        self.read_sizes: list[int] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_arguments) -> None:
+        return None
+
+    def geturl(self) -> str:
+        return self.url
+
+    def getcode(self) -> int:
+        return self.status
+
+    def read(self, size: int) -> bytes:
+        self.read_sizes.append(size)
+        return b"x"
 
 
 def _copy_issue_form_fixture(root: Path) -> tuple[LabelDefinition, ...]:
@@ -1591,6 +1620,65 @@ updates:
             )
             errors = validate_automation(root, labels)
             self.assertTrue(any("GitHub expression in run script" in error for error in errors))
+
+
+class SensitiveLinkTests(unittest.TestCase):
+    def test_sensitive_link_allowlist_is_fixed_and_https_only(self) -> None:
+        self.assertEqual(len(SENSITIVE_LINKS), 4)
+        for _name, url in SENSITIVE_LINKS:
+            with self.subTest(url=url):
+                validate_sensitive_url(url)
+
+        for url in (
+            "http://github.com/mirealo/.github",
+            "https://example.com/report",
+            "https://user@github.com/mirealo/.github",
+            "https://github.com:444/mirealo/.github",
+        ):
+            with self.subTest(rejected=url), self.assertRaises(ValueError):
+                validate_sensitive_url(url)
+
+    def test_check_is_bounded_and_reads_only_one_byte(self) -> None:
+        responses = [
+            _FakeResponse(url)
+            for _name, url in SENSITIVE_LINKS
+        ]
+        opener = MagicMock()
+        opener.open.side_effect = responses
+
+        errors = check_sensitive_links(opener)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(opener.open.call_count, len(SENSITIVE_LINKS))
+        for link, invocation, response in zip(
+            SENSITIVE_LINKS,
+            opener.open.call_args_list,
+            responses,
+            strict=True,
+        ):
+            _name, expected_url = link
+            request = invocation.args[0]
+            self.assertEqual(request.full_url, expected_url)
+            self.assertEqual(
+                invocation.kwargs["timeout"],
+                REQUEST_TIMEOUT_SECONDS,
+            )
+            self.assertEqual(response.read_sizes, [1])
+
+    def test_unavailable_sensitive_link_returns_a_controlled_error(self) -> None:
+        responses = [
+            _FakeResponse(url, status=503 if index == 0 else 200)
+            for index, (_name, url) in enumerate(SENSITIVE_LINKS)
+        ]
+        opener = MagicMock()
+        opener.open.side_effect = responses
+
+        errors = check_sensitive_links(opener)
+
+        self.assertEqual(
+            errors,
+            ["published security policy: unexpected HTTP status 503"],
+        )
 
 
 class IssueFormTests(unittest.TestCase):
