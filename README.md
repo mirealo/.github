@@ -32,9 +32,10 @@ template directory.
 
 The [governance policy](GOVERNANCE.md) defines decision authority, triage,
 review, the honest single-maintainer bootstrap, and overrides. Native Issue Type
-and native issue fields are authoritative for issues. The canonical repository
+and native issue fields are authoritative for issues. Native Priority and native
+close reasons replace priority and resolution labels. The canonical repository
 label data lives in [.github/labels.yml](.github/labels.yml); the governance
-policy defines its narrower public-projection and pull-request roles.
+policy defines its workflow, contribution, and pull-request roles.
 
 Labels are repository-scoped. A repository that inherits these issue forms must
 also provision the referenced labels. Check a repository without making changes:

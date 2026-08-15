@@ -25,25 +25,14 @@ issue metadata.
 | Concern | Authority | Label role |
 | --- | --- | --- |
 | Issue classification | Native Issue Type | `bug` and `enhancement` classify pull requests only; `documentation` and `maintenance` may refine native Task issues and related pull requests. |
-| Planning data | Native issue fields | Labels do not replace Priority, Effort, Start date, Target date, or future native fields. |
+| Priority | Native Priority field | `Urgent`, `High`, `Medium`, and `Low` are the only public priority values. Labels never duplicate them. |
+| Other planning data | Native issue fields | Labels do not replace Effort, Start date, Target date, or future native fields. |
 | Public workflow | Repository policy | At most one `status:*` label publishes the triage or implementation state. |
-| Closure context | Native issue state plus maintainer decision | At most one `resolution:*` label explains a closure without implementation. |
+| Closure reason | Native issue state reason | Use `Completed`, `Duplicate`, or `Not planned`, with a concise explanation when context is not self-evident. |
 
-The `priority:*` labels are optional public projections of the organization-only
-native Priority field. The native field wins if the two disagree.
-
-| Native Priority | Optional public projection |
-| --- | --- |
-| Urgent | `priority: critical` |
-| High | `priority: high` |
-| Medium | `priority: medium` |
-| Low | `priority: low` |
-
-Maintainers apply or correct these projections deliberately. Governance
+The native Priority field is the sole public priority authority. Governance
 automation compares label definitions (name, color, and description) in the
-manifest with repository labels. It does not check whether each issue's native
-Priority field matches its optional public projection, and it does not mutate
-labels or native fields with a write token.
+manifest with repository labels. It does not inspect or mutate native fields.
 
 ## Issue lifecycle
 
@@ -52,20 +41,21 @@ Maintainers apply that status to issues created through another permitted path.
 Triage confirms that the report is actionable, supported, safe to discuss
 publicly, and classified correctly.
 
-- `status: needs-info` replaces the triage status while required information is
-  outstanding.
+- `status: needs-info` replaces the triage status only while an open issue is
+  waiting for information.
 - `status: accepted` means the direction is approved but work has not started.
 - `status: in-progress` means implementation or remediation is active.
 - `status: blocked` means a documented dependency or decision prevents progress.
 
-Use at most one public status and one public priority projection. Maintainers set
-the native Priority field only after validating impact and scope. `good first
+Use at most one public status. Maintainers set native Priority to `Urgent`,
+`High`, `Medium`, or `Low` only after validating impact and scope. `good first
 issue` and `help wanted` are applied only when acceptance criteria and
 contribution boundaries are clear.
 
-When closing work without implementation, use at most one of
-`resolution: duplicate`, `resolution: not-actionable`, or
-`resolution: not-planned` and explain the decision.
+Close delivered or otherwise resolved work as `Completed`. Close equivalent
+work as `Duplicate` and link the canonical issue. Close declined, unsupported,
+out-of-scope, or otherwise not-actionable work as `Not planned` and explain the
+decision. Native close reasons replace resolution labels.
 
 ## Solo-maintainer bootstrap
 
