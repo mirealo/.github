@@ -24,6 +24,10 @@ SENSITIVE_LINKS = (
         "https://github.com/mirealo/.github/blob/main/SUPPORT.md",
     ),
     (
+        "published conduct policy",
+        "https://github.com/mirealo/.github/blob/main/CODE_OF_CONDUCT.md",
+    ),
+    (
         "private vulnerability reporting",
         "https://github.com/mirealo/.github/security/advisories/new",
     ),

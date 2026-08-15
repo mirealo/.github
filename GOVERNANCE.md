@@ -69,12 +69,48 @@ provide them.
 independent review. A self-review, automated check, or tool-assisted review must
 not be described as independent human approval.
 
-When a second trusted maintainer receives appropriate repository access, the
-bootstrap ends. Before that maintainer participates in governance merges, the
-effective rulesets must require one approving review, code-owner review, and
-approval of the most recent push by someone other than its author. Ownership
-should then move from one personal account to a maintainer team containing the
-trusted reviewers.
+The `.github/CODEOWNERS` file applies only to this repository. GitHub does not
+inherit `CODEOWNERS` as a default community-health file. Every future
+repository must provision and maintain its own local ownership rules.
+
+## Ownership continuity
+
+Mirealo's target operating state has at least two trusted organization owners.
+When a second trusted maintainer is ready, verify that person's identity and
+secure 2FA out of band, add and test their organization access, promote them to
+owner, and move repository ownership to a maintainer team. Each repository must
+then update its local `CODEOWNERS` file.
+
+The solo-maintainer bootstrap ends before the second maintainer participates in
+governance merges. Effective rulesets must then require one approving review,
+code-owner review, and approval of the most recent push by someone other than
+its author. This transition creates human redundancy; automation never does.
+
+Each owner maintains at least two independent secure 2FA methods and a current
+set of recovery codes stored offline in a separate failure domain. Device
+identifiers, credentials, recovery codes, storage locations, and private
+successor contact details must never appear in repository content, issues,
+pull requests, Actions secrets, or public audit evidence.
+
+Owners periodically confirm, without consuming or rotating credentials merely
+for evidence, that each authentication method remains available, recovery codes
+remain readable, and successor access still matches policy. Succession transfers
+roles and verified access, never personal authentication material.
+
+## Break-glass changes
+
+Normal pull requests remain the preferred path. Break-glass changes are limited
+to incident containment, recovery of organization control, or repair of broken
+merge controls. They must use the smallest separately authorized settings or
+repository change for the shortest practical period. Mirealo does not maintain
+a permanent emergency bypass.
+
+Record the timestamp, reason, exact settings before and after, signed change,
+tests, and restoration evidence in the appropriate audit trail. Restore normal
+rules before ordinary work resumes. Put vulnerability details, credentials, or
+other sensitive incident facts in a private security advisory rather than a
+public issue or pull request. A solo-owner emergency action is not independent
+review.
 
 ## Pull requests
 
