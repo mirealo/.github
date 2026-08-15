@@ -792,6 +792,8 @@ def validate_label_manifest(path: Path) -> tuple[LabelDefinition, ...]:
             or not label.name
         ):
             raise GovernanceError(f"{context}: name must be non-empty lowercase")
+        if len(label.name) > 50:
+            raise GovernanceError(f"{context}: name must not exceed 50 characters")
         if label.name in names:
             raise GovernanceError(f"{path}: duplicate label: {label.name}")
         if not COLOR_PATTERN.fullmatch(label.color):
@@ -801,11 +803,13 @@ def validate_label_manifest(path: Path) -> tuple[LabelDefinition, ...]:
         if (
             label.description != label.description.strip()
             or len(label.description) < 2
+            or len(label.description) > 100
             or not label.description[0].isupper()
             or not label.description.endswith(".")
         ):
             raise GovernanceError(
-                f"{context}: description must be a complete trimmed sentence"
+                f"{context}: description must be a complete trimmed sentence "
+                "of at most 100 characters"
             )
         names.add(label.name)
         labels.append(label)

@@ -1418,6 +1418,26 @@ labels:
             ):
                 validate_label_manifest(path)
 
+    def test_manifest_rejects_description_over_github_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "labels.yml"
+            manifest = (ROOT / ".github" / "labels.yml").read_text(
+                encoding="utf-8"
+            )
+            path.write_text(
+                manifest.replace(
+                    "Pull request addressing a defect; issues use the native Bug type.",
+                    "A" * 100 + ".",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                GovernanceError,
+                "description must be a complete trimmed sentence of at most 100 characters",
+            ):
+                validate_label_manifest(path)
+
 
 class AutomationPolicyTests(unittest.TestCase):
     def test_repository_automation_is_minimal_and_pinned(self) -> None:
@@ -2225,24 +2245,147 @@ class SyncCliContractTests(unittest.TestCase):
             ]
         )
 
-    def test_rejects_repository_override(self) -> None:
+    def test_repository_argument_is_required_and_validated(self) -> None:
         sync_labels = self._sync_module()
-        stderr = io.StringIO()
+        invalid = (
+            None,
+            "owner",
+            "owner/repo/extra",
+            "-owner/repo",
+            "owner--name/repo",
+            "owner/..",
+            "owner/repo name",
+            "https://github.com/owner/repo",
+        )
+        for repository in invalid:
+            argv = ["sync_labels.py"]
+            if repository is not None:
+                argv.extend(("--repo", repository))
+            with (
+                self.subTest(repository=repository),
+                patch.object(sys, "argv", argv),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                sync_labels.parse_arguments()
+            self.assertEqual(raised.exception.code, 2)
+
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "sync_labels.py",
+                "--repo",
+                "mirealo/.github",
+                "--check",
+            ],
+        ):
+            arguments = sync_labels.parse_arguments()
+        self.assertEqual(arguments.repo, "mirealo/.github")
+        self.assertTrue(arguments.check)
+
+    def test_check_is_read_only_and_targets_requested_repository(self) -> None:
+        sync_labels = self._sync_module()
+        expected = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        list_command = [
+            "label",
+            "list",
+            "--repo",
+            "mirealo/example",
+            "--limit",
+            "1000",
+            "--json",
+            "name,color,description",
+        ]
         with (
+            patch.object(
+                sync_labels,
+                "run_gh",
+                return_value=self._remote_json(expected),
+            ) as run_gh,
             patch.object(
                 sys,
                 "argv",
-                ["sync_labels.py", "--repo", "another/repository"],
+                [
+                    "sync_labels.py",
+                    "--repo",
+                    "mirealo/example",
+                    "--check",
+                ],
             ),
-            contextlib.redirect_stderr(stderr),
-            self.assertRaises(SystemExit) as raised,
+            contextlib.redirect_stdout(io.StringIO()),
         ):
-            sync_labels.parse_arguments()
-        self.assertEqual(raised.exception.code, 2)
-        self.assertIn(
-            "unrecognized arguments: --repo another/repository",
-            stderr.getvalue(),
-        )
+            result = sync_labels.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(run_gh.call_args_list, [call(list_command)])
+
+    def test_check_returns_nonzero_for_drift_without_mutation(self) -> None:
+        sync_labels = self._sync_module()
+        expected = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        list_command = [
+            "label",
+            "list",
+            "--repo",
+            "mirealo/example",
+            "--limit",
+            "1000",
+            "--json",
+            "name,color,description",
+        ]
+        with (
+            patch.object(
+                sync_labels,
+                "run_gh",
+                return_value=self._remote_json(expected[1:]),
+            ) as run_gh,
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "sync_labels.py",
+                    "--repo",
+                    "mirealo/example",
+                    "--check",
+                ],
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = sync_labels.main()
+
+        self.assertEqual(result, 1)
+        self.assertEqual(run_gh.call_args_list, [call(list_command)])
+
+    def test_default_mode_reports_drift_without_mutation(self) -> None:
+        sync_labels = self._sync_module()
+        expected = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        list_command = [
+            "label",
+            "list",
+            "--repo",
+            "mirealo/example",
+            "--limit",
+            "1000",
+            "--json",
+            "name,color,description",
+        ]
+        with (
+            patch.object(
+                sync_labels,
+                "run_gh",
+                return_value=self._remote_json(expected[1:]),
+            ) as run_gh,
+            patch.object(
+                sys,
+                "argv",
+                ["sync_labels.py", "--repo", "mirealo/example"],
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = sync_labels.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(run_gh.call_args_list, [call(list_command)])
 
     def test_apply_refuses_extras_without_mutation(self) -> None:
         sync_labels = self._sync_module()
@@ -2259,9 +2402,9 @@ class SyncCliContractTests(unittest.TestCase):
             "label",
             "list",
             "--repo",
-            "mirealo/.github",
+            "mirealo/example",
             "--limit",
-            "100",
+            "1000",
             "--json",
             "name,color,description",
         ]
@@ -2270,7 +2413,16 @@ class SyncCliContractTests(unittest.TestCase):
         with (
             patch.object(sync_labels, "run_gh", return_value=json.dumps(remote))
             as run_gh,
-            patch.object(sys, "argv", ["sync_labels.py", "--apply"]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "sync_labels.py",
+                    "--repo",
+                    "mirealo/example",
+                    "--apply",
+                ],
+            ),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
@@ -2295,9 +2447,9 @@ class SyncCliContractTests(unittest.TestCase):
             "label",
             "list",
             "--repo",
-            "mirealo/.github",
+            "mirealo/example",
             "--limit",
-            "100",
+            "1000",
             "--json",
             "name,color,description",
         ]
@@ -2314,7 +2466,16 @@ class SyncCliContractTests(unittest.TestCase):
                     self._remote_json(expected),
                 ],
             ) as run_gh,
-            patch.object(sys, "argv", ["sync_labels.py", "--apply"]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "sync_labels.py",
+                    "--repo",
+                    "mirealo/example",
+                    "--apply",
+                ],
+            ),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
@@ -2330,7 +2491,7 @@ class SyncCliContractTests(unittest.TestCase):
                         "create",
                         missing.name,
                         "--repo",
-                        "mirealo/.github",
+                        "mirealo/example",
                         "--color",
                         missing.color,
                         "--description",
@@ -2343,7 +2504,7 @@ class SyncCliContractTests(unittest.TestCase):
                         "edit",
                         changed.name,
                         "--repo",
-                        "mirealo/.github",
+                        "mirealo/example",
                         "--color",
                         changed.color,
                         "--description",
