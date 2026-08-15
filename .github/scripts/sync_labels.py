@@ -25,6 +25,7 @@ REPOSITORY_PATTERN = re.compile(
 REMOTE_LABEL_LIMIT = 1000
 GITHUB_HOSTNAME = "github.com"
 RETIREMENT_REPOSITORY = "mirealo/.github"
+RETIREMENT_STEP_LIMIT_V1 = 7
 OBSOLETE_LABELS_V1 = (
     RemoteLabel(
         "priority: critical",
@@ -383,6 +384,78 @@ def validate_retirement_preflight_v1(
             + ", ".join(missing)
         )
     return present
+
+
+def _validate_retirement_progress_v1(
+    expected: tuple[LabelDefinition, ...],
+    remote: tuple[RemoteLabel, ...],
+) -> tuple[str, ...]:
+    present = validate_retirement_state(expected, remote)
+    frozen_names = tuple(label.name for label in OBSOLETE_LABELS_V1)
+    deleted_count = len(frozen_names) - len(present)
+    if present != frozen_names[deleted_count:]:
+        raise GovernanceError(
+            "retirement progress is not an exact deleted prefix"
+        )
+    return present
+
+
+def _retirement_inventory_signature_v1(
+    remote: tuple[RemoteLabel, ...],
+) -> tuple[tuple[str, str, str], ...]:
+    return tuple(
+        sorted(
+            (label.name, label.color.lower(), label.description)
+            for label in remote
+        )
+    )
+
+
+def retire_obsolete_labels_v1(
+    repository: str,
+    expected: tuple[LabelDefinition, ...],
+) -> LabelDrift:
+    retirement_repository_target(repository)
+    frozen_names = tuple(label.name for label in OBSOLETE_LABELS_V1)
+    successful_steps = 0
+    current = read_retirement_labels_v1(repository)
+
+    while True:
+        present = _validate_retirement_progress_v1(expected, current)
+        if not present:
+            final = compare_labels(expected, current)
+            if not final.clean:
+                raise GovernanceError(
+                    "final label inventory does not match the manifest"
+                )
+            return final
+        if successful_steps >= RETIREMENT_STEP_LIMIT_V1:
+            raise GovernanceError("label retirement exceeded seven steps")
+        if successful_steps == 0 and present == frozen_names:
+            validate_retirement_preflight_v1(expected, current)
+
+        proof = prove_retirement_labels_unused_v1(repository)
+        confirmed = read_retirement_labels_v1(repository)
+        confirmed_present = _validate_retirement_progress_v1(
+            expected,
+            confirmed,
+        )
+        if _retirement_inventory_signature_v1(
+            confirmed
+        ) != _retirement_inventory_signature_v1(current):
+            raise GovernanceError(
+                "label inventory changed after the zero-use proof"
+            )
+
+        delete_next_retirement_label_v1(expected, confirmed, proof)
+        successful_steps += 1
+        advanced = read_retirement_labels_v1(repository)
+        advanced_present = _validate_retirement_progress_v1(expected, advanced)
+        if advanced_present != confirmed_present[1:]:
+            raise GovernanceError(
+                "label retirement did not remove exactly the next label"
+            )
+        current = advanced
 
 
 def parse_arguments() -> argparse.Namespace:

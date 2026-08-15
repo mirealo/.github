@@ -2884,6 +2884,281 @@ class RetirementSafetyTests(unittest.TestCase):
         )
 
 
+class RetirementOrchestrationTests(unittest.TestCase):
+    def _sync_module(self):
+        return importlib.import_module("sync_labels")
+
+    @staticmethod
+    def _expected_and_retained():
+        expected = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        retained = tuple(
+            RemoteLabel(label.name, label.color, label.description)
+            for label in expected
+        )
+        return expected, retained
+
+    @staticmethod
+    def _zero_proof(sync_labels):
+        return sync_labels.RetirementUsageProofV1(
+            "mirealo/.github",
+            tuple(
+                sync_labels.LabelUsageV1(label, 0, 0)
+                for label in sync_labels.OBSOLETE_LABELS_V1
+            ),
+        )
+
+    @staticmethod
+    def _ordered_states(sync_labels, retained, deleted_prefix: int):
+        remaining = list(sync_labels.OBSOLETE_LABELS_V1[deleted_prefix:])
+        states = [retained + tuple(remaining)]
+        while remaining:
+            states.append(retained + tuple(remaining))
+            remaining.pop(0)
+            states.append(retained + tuple(remaining))
+        return states
+
+    @staticmethod
+    def _patched(sync_labels, inventories, proofs=(), delete_error=None):
+        read_inventory = MagicMock(side_effect=inventories)
+        prove_unused = MagicMock(side_effect=proofs)
+        delete_next = MagicMock(side_effect=delete_error)
+        transaction = patch.multiple(
+            sync_labels,
+            read_retirement_labels_v1=read_inventory,
+            prove_retirement_labels_unused_v1=prove_unused,
+            delete_next_retirement_label_v1=delete_next,
+        )
+        return transaction, read_inventory, prove_unused, delete_next
+
+    def test_full_retirement_uses_fresh_proof_for_each_ordered_step(self) -> None:
+        sync_labels = self._sync_module()
+        expected, retained = self._expected_and_retained()
+        states = self._ordered_states(sync_labels, retained, 0)
+        proofs = [
+            self._zero_proof(sync_labels)
+            for _label in sync_labels.OBSOLETE_LABELS_V1
+        ]
+        transaction, read_inventory, prove_unused, delete_next = self._patched(
+            sync_labels, states, proofs
+        )
+        with transaction:
+            result = sync_labels.retire_obsolete_labels_v1(
+                "mirealo/.github",
+                expected,
+            )
+
+        self.assertTrue(result.clean)
+        self.assertEqual(sync_labels.RETIREMENT_STEP_LIMIT_V1, 7)
+        self.assertEqual(read_inventory.call_count, 15)
+        self.assertEqual(prove_unused.call_count, 7)
+        self.assertEqual(delete_next.call_count, 7)
+        self.assertEqual(len({id(proof) for proof in proofs}), 7)
+        for index, invocation in enumerate(delete_next.call_args_list):
+            self.assertEqual(invocation.args[0], expected)
+            self.assertEqual(
+                invocation.args[1],
+                retained + sync_labels.OBSOLETE_LABELS_V1[index:],
+            )
+            self.assertIs(invocation.args[2], proofs[index])
+
+    def test_partial_prefix_reentry_and_completed_noop_are_safe(self) -> None:
+        sync_labels = self._sync_module()
+        expected, retained = self._expected_and_retained()
+        for deleted_prefix in (3, 7):
+            steps = 7 - deleted_prefix
+            proofs = [self._zero_proof(sync_labels) for _ in range(steps)]
+            transaction, read_inventory, prove_unused, delete_next = self._patched(
+                sync_labels,
+                self._ordered_states(sync_labels, retained, deleted_prefix),
+                proofs,
+            )
+            with self.subTest(deleted_prefix=deleted_prefix), transaction:
+                result = sync_labels.retire_obsolete_labels_v1(
+                    "mirealo/.github",
+                    expected,
+                )
+            self.assertTrue(result.clean)
+            self.assertEqual(read_inventory.call_count, 1 + (2 * steps))
+            self.assertEqual(prove_unused.call_count, steps)
+            self.assertEqual(delete_next.call_count, steps)
+
+    def test_rejects_wrong_repository_and_invalid_initial_inventory(self) -> None:
+        sync_labels = self._sync_module()
+        expected, retained = self._expected_and_retained()
+        frozen = sync_labels.OBSOLETE_LABELS_V1
+        changed = frozen[0]
+        fixtures = (
+            (
+                "gap in deleted prefix",
+                retained + frozen[:1] + frozen[2:],
+                "exact deleted prefix",
+            ),
+            (
+                "changed legacy definition",
+                retained
+                + (RemoteLabel(changed.name, changed.color, "Changed."),)
+                + frozen[1:],
+                "historical definition",
+            ),
+            (
+                "retained drift",
+                (RemoteLabel(retained[0].name, "ffffff", retained[0].description),)
+                + retained[1:]
+                + frozen,
+                "retained labels",
+            ),
+            (
+                "unexpected extra",
+                retained + frozen + (RemoteLabel("extra", "000000", "Extra."),),
+                "unexpected labels",
+            ),
+            (
+                "case ambiguity",
+                retained + frozen + (RemoteLabel("BUG", "000000", "Duplicate."),),
+                "duplicate names",
+            ),
+            (
+                "truncated inventory",
+                tuple(
+                    RemoteLabel(f"label-{index}", "000000", "Synthetic.")
+                    for index in range(1000)
+                ),
+                "may be truncated",
+            ),
+        )
+        with patch.object(sync_labels, "read_retirement_labels_v1") as read:
+            with self.assertRaisesRegex(
+                GovernanceError,
+                "unapproved label retirement",
+            ):
+                sync_labels.retire_obsolete_labels_v1("mirealo/example", expected)
+        read.assert_not_called()
+
+        for name, remote, message in fixtures:
+            transaction, _read, prove_unused, delete_next = self._patched(
+                sync_labels, [remote]
+            )
+            with (
+                self.subTest(name=name),
+                transaction,
+                self.assertRaisesRegex(GovernanceError, message),
+            ):
+                sync_labels.retire_obsolete_labels_v1(
+                    "mirealo/.github",
+                    expected,
+                )
+            prove_unused.assert_not_called()
+            delete_next.assert_not_called()
+
+    def test_inventory_must_not_change_after_each_fresh_proof(self) -> None:
+        sync_labels = self._sync_module()
+        expected, retained = self._expected_and_retained()
+        frozen = sync_labels.OBSOLETE_LABELS_V1
+        transaction, _read, prove_unused, delete_next = self._patched(
+            sync_labels,
+            [retained + frozen, retained + frozen[1:]],
+            [self._zero_proof(sync_labels)],
+        )
+        with (
+            transaction,
+            self.assertRaisesRegex(GovernanceError, "changed after the zero-use proof"),
+        ):
+            sync_labels.retire_obsolete_labels_v1("mirealo/.github", expected)
+        prove_unused.assert_called_once_with("mirealo/.github")
+        delete_next.assert_not_called()
+
+    def test_transport_proof_and_delete_failures_stop_immediately(self) -> None:
+        sync_labels = self._sync_module()
+        expected, retained = self._expected_and_retained()
+        current = retained + sync_labels.OBSOLETE_LABELS_V1[-1:]
+        proof = self._zero_proof(sync_labels)
+        fixtures = (
+            (
+                "inventory transport",
+                GovernanceError("inventory failed"),
+                None,
+                None,
+                "inventory failed",
+                1,
+            ),
+            (
+                "nonzero or malformed proof",
+                [current],
+                GovernanceError("proof failed"),
+                None,
+                "proof failed",
+                1,
+            ),
+            (
+                "delete transport",
+                [current, current],
+                [proof],
+                GovernanceError("delete failed"),
+                "delete failed",
+                2,
+            ),
+        )
+        for name, inventories, proof_result, delete_result, message, reads in fixtures:
+            transaction, read_inventory, _prove, _delete = self._patched(
+                sync_labels,
+                inventories,
+                proof_result,
+                delete_result,
+            )
+            with (
+                self.subTest(name=name),
+                transaction,
+                self.assertRaisesRegex(GovernanceError, message),
+            ):
+                sync_labels.retire_obsolete_labels_v1(
+                    "mirealo/.github",
+                    expected,
+                )
+            self.assertEqual(read_inventory.call_count, reads)
+
+    def test_step_bound_and_final_readback_fail_closed(self) -> None:
+        sync_labels = self._sync_module()
+        expected, retained = self._expected_and_retained()
+        current = retained + sync_labels.OBSOLETE_LABELS_V1[-1:]
+        proof = self._zero_proof(sync_labels)
+        transaction, _read, prove_unused, delete_next = self._patched(
+            sync_labels, [current]
+        )
+        with (
+            patch.object(sync_labels, "RETIREMENT_STEP_LIMIT_V1", 0),
+            transaction,
+            self.assertRaisesRegex(GovernanceError, "exceeded seven steps"),
+        ):
+            sync_labels.retire_obsolete_labels_v1("mirealo/.github", expected)
+        prove_unused.assert_not_called()
+        delete_next.assert_not_called()
+
+        dirty = (
+            RemoteLabel(retained[0].name, "ffffff", retained[0].description),
+        ) + retained[1:]
+        current_two = retained + sync_labels.OBSOLETE_LABELS_V1[-2:]
+        for name, before, advanced, message in (
+            ("leftover legacy", current, current, "did not remove exactly"),
+            ("out-of-band deletion", current_two, retained, "did not remove exactly"),
+            ("dirty final manifest", current, dirty, "retained labels"),
+        ):
+            transaction, _read, _prove, delete_next = self._patched(
+                sync_labels,
+                [before, before, advanced],
+                [proof],
+            )
+            with (
+                self.subTest(name=name),
+                transaction,
+                self.assertRaisesRegex(GovernanceError, message),
+            ):
+                sync_labels.retire_obsolete_labels_v1(
+                    "mirealo/.github",
+                    expected,
+                )
+            delete_next.assert_called_once()
+
+
 class SyncCliContractTests(unittest.TestCase):
     def _sync_module(self):
         try:
