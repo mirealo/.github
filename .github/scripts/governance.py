@@ -276,6 +276,54 @@ EXPECTED_STEP_KEYS = (
     {"name", "run"},
     {"name", "run"},
 )
+EXPECTED_MONITOR_WORKFLOW = {
+    "name": "Governance monitor",
+    "on": {
+        "schedule": [{"cron": "23 6 * * 1"}],
+        "workflow_dispatch": None,
+    },
+    "permissions": {"contents": "read", "issues": "read"},
+    "concurrency": {
+        "group": "governance-monitor-${{ github.repository }}",
+        "cancel-in-progress": True,
+    },
+    "jobs": {
+        "monitor": {
+            "name": "Governance remote health",
+            "if": "github.ref == 'refs/heads/main'",
+            "runs-on": "ubuntu-24.04",
+            "timeout-minutes": 5,
+            "env": {"GH_TOKEN": "${{ github.token }}"},
+            "steps": [
+                {
+                    "name": "Check out published main",
+                    "uses": APPROVED_CHECKOUT_ACTION,
+                    "with": {
+                        "persist-credentials": False,
+                        "ref": "main",
+                    },
+                },
+                {
+                    "name": "Report tool versions",
+                    "run": "python3 --version\nyq --version\ngh --version\n",
+                },
+                {
+                    "name": "Check remote label drift",
+                    "run": (
+                        "python3 .github/scripts/sync_labels.py --repo "
+                        '"$GITHUB_REPOSITORY" --check'
+                    ),
+                },
+                {
+                    "name": "Check sensitive external links",
+                    "run": (
+                        "python3 .github/scripts/check_sensitive_links.py"
+                    ),
+                },
+            ],
+        }
+    },
+}
 EXPECTED_DEPENDABOT_UPDATE = {
     "package-ecosystem": "github-actions",
     "directory": "/",
@@ -1149,6 +1197,9 @@ def validate_automation(
 ) -> list[str]:
     errors: list[str] = []
     workflow_path = root / ".github" / "workflows" / "governance.yml"
+    monitor_path = (
+        root / ".github" / "workflows" / "governance-monitor.yml"
+    )
     dependabot_path = root / ".github" / "dependabot.yml"
     workflow_files = sorted(
         {
@@ -1158,13 +1209,14 @@ def validate_automation(
             if path.is_file()
         }
     )
-    if workflow_files != ["governance.yml"]:
+    expected_workflow_files = ["governance-monitor.yml", "governance.yml"]
+    if workflow_files != expected_workflow_files:
         errors.append(
             f"{workflow_path.parent}: workflow files must equal "
-            "['governance.yml']"
+            f"{expected_workflow_files}"
         )
     missing_errors: list[str] = []
-    for path in (workflow_path, dependabot_path):
+    for path in (workflow_path, monitor_path, dependabot_path):
         if not path.is_file():
             missing_errors.append(
                 f"missing required file: {path.relative_to(root)}"
@@ -1296,6 +1348,17 @@ def validate_automation(
                     run_script = step.get("run")
                     if isinstance(run_script, str) and "${{" in run_script:
                         errors.append(f"{workflow_path}: GitHub expression in run script")
+
+    try:
+        monitor = load_yaml(monitor_path)
+    except GovernanceError as error:
+        errors.append(str(error))
+    else:
+        if monitor != EXPECTED_MONITOR_WORKFLOW:
+            errors.append(
+                f"{monitor_path}: configuration must equal the approved "
+                "main-only read-only monitoring policy"
+            )
 
     try:
         dependabot = load_yaml(dependabot_path)

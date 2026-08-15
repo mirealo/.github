@@ -1,0 +1,42 @@
+name: Governance monitor
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: governance-monitor-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    name: Governance remote health
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out published main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+
+      - name: Report tool versions
+        run: |
+          python3 --version
+          yq --version
+          gh --version
+
+      - name: Check remote label drift
+        run: python3 .github/scripts/sync_labels.py --repo "$GITHUB_REPOSITORY" --check
+
+      - name: Check sensitive external links
+        run: python3 .github/scripts/check_sensitive_links.py

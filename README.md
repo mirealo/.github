@@ -59,6 +59,11 @@ python3 .github/scripts/validate_governance.py
 The validator requires Python 3.11 or newer and a compatible `yq` command. It
 supports the local Python-`yq` interface and Go-`yq` v4 on GitHub-hosted runners.
 
+The read-only Governance monitor runs weekly and on manual dispatch from `main`.
+It compares remote labels with the published manifest and checks a fixed,
+bounded allowlist of sensitive external links. It never runs on pull requests
+and has no permission to change labels, issue fields, or linked resources.
+
 ## Security
 
 Never disclose a vulnerability, credential, personal data, customer data,
