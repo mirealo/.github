@@ -2,23 +2,23 @@ version: 1
 labels:
   - name: bug
     color: d73a4a
-    description: Reproducible defect in a supported version or exact commit.
+    description: Pull request addressing a defect; issues use the native Bug type.
     category: work
   - name: documentation
     color: 0075ca
-    description: Incorrect, missing, unclear, or outdated documentation.
+    description: Documentation subtype for Task issues and related pull requests.
     category: work
   - name: enhancement
     color: a2eeef
-    description: Proposed product or engineering improvement with a clear user benefit.
+    description: Pull request implementing a feature; issues use the native Feature type.
     category: work
   - name: maintenance
     color: "5319e7"
-    description: Technical, automation, policy, or repository upkeep that is not a feature or defect.
+    description: Maintenance subtype for Task issues and related pull requests.
     category: work
   - name: dependencies
     color: 0366d6
-    description: Dependency-only updates, including controlled automated upgrades.
+    description: Dependency maintenance for issues and pull requests.
     category: work
   - name: "status: needs-triage"
     color: d4c5f9
@@ -42,19 +42,19 @@ labels:
     category: status
   - name: "priority: critical"
     color: b60205
-    description: Immediate attention required because of severe operational or user impact.
+    description: Public projection of native Priority Urgent; the native field is authoritative.
     category: priority
   - name: "priority: high"
     color: d93f0b
-    description: High-impact work that should precede normal-priority items.
+    description: Public projection of native Priority High; the native field is authoritative.
     category: priority
   - name: "priority: medium"
     color: fbca04
-    description: Normal planned priority after maintainer triage.
+    description: Public projection of native Priority Medium; the native field is authoritative.
     category: priority
   - name: "priority: low"
     color: c5def5
-    description: Useful work with limited impact or urgency.
+    description: Public projection of native Priority Low; the native field is authoritative.
     category: priority
   - name: good first issue
     color: 7057ff

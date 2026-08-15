@@ -2,7 +2,6 @@ name: Feature proposal
 description: Propose a focused improvement with a clear, testable user benefit.
 title: "[Feature]: "
 labels:
-  - enhancement
   - "status: needs-triage"
 type: Feature
 body:

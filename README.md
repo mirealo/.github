@@ -31,9 +31,10 @@ template directory.
 ## Operating model
 
 The [governance policy](GOVERNANCE.md) defines decision authority, triage,
-review, and overrides. The canonical label data lives in
-[.github/labels.yml](.github/labels.yml); human lifecycle rules remain in the
-governance policy.
+review, the honest single-maintainer bootstrap, and overrides. Native Issue Type
+and native issue fields are authoritative for issues. The canonical repository
+label data lives in [.github/labels.yml](.github/labels.yml); the governance
+policy defines its narrower public-projection and pull-request roles.
 
 ## Validate a change
 

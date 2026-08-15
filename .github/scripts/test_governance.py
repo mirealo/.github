@@ -130,6 +130,11 @@ class CommunityFileTests(unittest.TestCase):
                     + "\n".join(
                         REQUIRED_POLICY_HEADINGS.get(Path(relative), ())
                     )
+                    + (
+                        "\n[Private contact](mailto:conduct@mirealo.com)"
+                        if relative == "CODE_OF_CONDUCT.md"
+                        else ""
+                    )
                     + "\n"
                 )
                 path.write_text(contents, encoding="utf-8")
@@ -242,6 +247,29 @@ class CommunityFileTests(unittest.TestCase):
                     [f"{relative.as_posix()}: unable to read as UTF-8"],
                 )
 
+    def test_conduct_policy_requires_the_confidential_contact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(
+                ROOT,
+                root,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(".git", "__pycache__"),
+            )
+            conduct = root / "CODE_OF_CONDUCT.md"
+            conduct.write_text(
+                conduct.read_text(encoding="utf-8").replace(
+                    "mailto:conduct@mirealo.com",
+                    "#missing-contact",
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertIn(
+                "CODE_OF_CONDUCT.md: confidential conduct contact is required",
+                validate_community_files(root),
+            )
+
 
 class PolicyStructureTests(unittest.TestCase):
     def test_repository_policies_have_required_sections(self) -> None:
@@ -250,6 +278,30 @@ class PolicyStructureTests(unittest.TestCase):
             error for error in errors if "missing heading:" in error
         ]
         self.assertEqual(policy_errors, [])
+
+    def test_solo_maintainer_and_issue_authority_are_explicit(self) -> None:
+        governance = (ROOT / "GOVERNANCE.md").read_text(encoding="utf-8")
+        for statement in (
+            "Native Issue Type",
+            "The native field wins if the two disagree.",
+            "| Urgent | `priority: critical` |",
+            "Required human approvals, code-owner review, and",
+            "last-push approval remain at zero",
+            "must require one approving review, code-owner review, and",
+            "described as independent human approval.",
+        ):
+            with self.subTest(statement=statement):
+                self.assertIn(statement, governance)
+
+        conduct = (ROOT / "CODE_OF_CONDUCT.md").read_text(encoding="utf-8")
+        for statement in (
+            "mailto:conduct@mirealo.com",
+            "does not promise a response or resolution deadline",
+            "no second maintainer who can provide independent internal",
+            "not a Mirealo appeal or a promise of action",
+        ):
+            with self.subTest(statement=statement):
+                self.assertIn(statement, conduct)
 
 
 class YamlAdapterTests(unittest.TestCase):
@@ -1203,31 +1255,31 @@ class LabelManifestTests(unittest.TestCase):
                 (
                     "bug",
                     "d73a4a",
-                    "Reproducible defect in a supported version or exact commit.",
+                    "Pull request addressing a defect; issues use the native Bug type.",
                     "work",
                 ),
                 (
                     "documentation",
                     "0075ca",
-                    "Incorrect, missing, unclear, or outdated documentation.",
+                    "Documentation subtype for Task issues and related pull requests.",
                     "work",
                 ),
                 (
                     "enhancement",
                     "a2eeef",
-                    "Proposed product or engineering improvement with a clear user benefit.",
+                    "Pull request implementing a feature; issues use the native Feature type.",
                     "work",
                 ),
                 (
                     "maintenance",
                     "5319e7",
-                    "Technical, automation, policy, or repository upkeep that is not a feature or defect.",
+                    "Maintenance subtype for Task issues and related pull requests.",
                     "work",
                 ),
                 (
                     "dependencies",
                     "0366d6",
-                    "Dependency-only updates, including controlled automated upgrades.",
+                    "Dependency maintenance for issues and pull requests.",
                     "work",
                 ),
                 (
@@ -1263,25 +1315,25 @@ class LabelManifestTests(unittest.TestCase):
                 (
                     "priority: critical",
                     "b60205",
-                    "Immediate attention required because of severe operational or user impact.",
+                    "Public projection of native Priority Urgent; the native field is authoritative.",
                     "priority",
                 ),
                 (
                     "priority: high",
                     "d93f0b",
-                    "High-impact work that should precede normal-priority items.",
+                    "Public projection of native Priority High; the native field is authoritative.",
                     "priority",
                 ),
                 (
                     "priority: medium",
                     "fbca04",
-                    "Normal planned priority after maintainer triage.",
+                    "Public projection of native Priority Medium; the native field is authoritative.",
                     "priority",
                 ),
                 (
                     "priority: low",
                     "c5def5",
-                    "Useful work with limited impact or urgency.",
+                    "Public projection of native Priority Low; the native field is authoritative.",
                     "priority",
                 ),
                 (
@@ -1527,6 +1579,23 @@ class IssueFormTests(unittest.TestCase):
         errors = validate_issue_forms(ROOT, labels)
         self.assertEqual(errors, [])
 
+    def test_native_bug_and_feature_types_are_not_duplicated_by_labels(self) -> None:
+        cases = (
+            ("01-bug-report.yml", "Bug"),
+            ("02-feature-proposal.yml", "Feature"),
+        )
+        for filename, issue_type in cases:
+            with self.subTest(filename=filename):
+                form = load_yaml(
+                    ROOT / ".github" / "ISSUE_TEMPLATE" / filename
+                )
+                self.assertIsInstance(form, dict)
+                self.assertEqual(form.get("type"), issue_type)
+                self.assertEqual(
+                    form.get("labels"),
+                    ["status: needs-triage"],
+                )
+
     def test_issue_form_schema_rejects_empty_or_markdown_only_body(self) -> None:
         with self.subTest(body="empty"), tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1540,9 +1609,12 @@ class IssueFormTests(unittest.TestCase):
 
             errors = validate_issue_forms(root, labels)
 
-            self.assertIn(
-                f"{form_path}:8: flow collections are unsupported",
-                errors,
+            self.assertTrue(
+                any(
+                    str(form_path) in error
+                    and "flow collections are unsupported" in error
+                    for error in errors
+                )
             )
 
         with self.subTest(body="markdown-only"), tempfile.TemporaryDirectory() as directory:
@@ -1628,7 +1700,7 @@ class IssueFormTests(unittest.TestCase):
                     "dropdown empty options",
                     ("body", 4, "attributes", "options"),
                     [],
-                    "{path}:56: flow collections are unsupported",
+                    "{path}:55: flow collections are unsupported",
                 ),
                 (
                     "dropdown non-string option",
@@ -1682,7 +1754,7 @@ class IssueFormTests(unittest.TestCase):
                     "checkboxes empty options",
                     ("body", 1, "attributes", "options"),
                     [],
-                    "{path}:19: flow collections are unsupported",
+                    "{path}:18: flow collections are unsupported",
                 ),
                 (
                     "checkboxes non-mapping option",
@@ -2098,7 +2170,7 @@ contact_links:
             self.assertTrue(
                 any(
                     "01-bug-report.yml labels must equal "
-                    "['bug', 'status: needs-triage']" in error
+                    "['status: needs-triage']" in error
                     for error in errors
                 )
             )

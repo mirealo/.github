@@ -36,4 +36,7 @@ Do not use public issues for:
 
 Never post credentials, tokens, personal data, customer data, proprietary
 source, or unsanitized logs. Follow the [security policy](SECURITY.md) for every
-suspected vulnerability.
+suspected vulnerability. Report conduct concerns privately to
+[conduct@mirealo.com](mailto:conduct@mirealo.com) under the
+[code of conduct](CODE_OF_CONDUCT.md); do not use either route for ordinary
+support.

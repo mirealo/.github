@@ -54,11 +54,11 @@ EXPECTED_FORMS = (
 EXPECTED_FORM_METADATA = {
     "01-bug-report.yml": (
         "Bug",
-        ("bug", "status: needs-triage"),
+        ("status: needs-triage",),
     ),
     "02-feature-proposal.yml": (
         "Feature",
-        ("enhancement", "status: needs-triage"),
+        ("status: needs-triage",),
     ),
     "03-documentation-issue.yml": (
         "Task",
@@ -180,6 +180,8 @@ YAML_PROFILE_FORBIDDEN_NODE_PREFIXES = {
 }
 SECURITY_URL = "https://github.com/mirealo/.github/blob/main/SECURITY.md"
 SUPPORT_URL = "https://github.com/mirealo/.github/blob/main/SUPPORT.md"
+CONDUCT_EMAIL = "conduct@mirealo.com"
+CONDUCT_MAILTO = f"mailto:{CONDUCT_EMAIL}"
 REQUIRED_COMMUNITY_FILES = (
     Path("README.md"),
     Path("profile/README.md"),
@@ -200,6 +202,16 @@ CODEOWNERS_WILDCARD_PATTERN = re.compile(
     r"(?m)^\*\s+@\S+(?:\s+@\S+)*\s*$"
 )
 REQUIRED_POLICY_HEADINGS = {
+    Path("GOVERNANCE.md"): (
+        "## Decision authority",
+        "## Issue authority and labels",
+        "## Issue lifecycle",
+        "## Solo-maintainer bootstrap",
+        "## Pull requests",
+        "## Policy changes",
+        "## Security and conduct",
+        "## Repository overrides",
+    ),
     Path("CONTRIBUTING.md"): (
         "## Before contributing",
         "## Propose substantial work",
@@ -1411,6 +1423,11 @@ def validate_community_files(root: Path) -> list[str]:
     if codeowners is not None:
         if not CODEOWNERS_WILDCARD_PATTERN.search(codeowners):
             errors.append(".github/CODEOWNERS: wildcard owner is required")
+    conduct = texts.get(Path("CODE_OF_CONDUCT.md"))
+    if conduct is not None and CONDUCT_MAILTO not in conduct:
+        errors.append(
+            "CODE_OF_CONDUCT.md: confidential conduct contact is required"
+        )
     errors.extend(_validate_policy_headings(texts))
     return errors
 
