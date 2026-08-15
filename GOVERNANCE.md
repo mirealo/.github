@@ -16,10 +16,39 @@ acceptance criteria, risk analysis, and validation evidence. Maintainers may
 request a design discussion before implementation when a change affects public
 interfaces, security boundaries, data handling, or long-term maintenance.
 
+## Issue authority and labels
+
+GitHub-native metadata is authoritative for issues. Labels provide public
+workflow context and pull-request categorization; they do not override native
+issue metadata.
+
+| Concern | Authority | Label role |
+| --- | --- | --- |
+| Issue classification | Native Issue Type | `bug` and `enhancement` classify pull requests only; `documentation` and `maintenance` may refine native Task issues and related pull requests. |
+| Planning data | Native issue fields | Labels do not replace Priority, Effort, Start date, Target date, or future native fields. |
+| Public workflow | Repository policy | At most one `status:*` label publishes the triage or implementation state. |
+| Closure context | Native issue state plus maintainer decision | At most one `resolution:*` label explains a closure without implementation. |
+
+The `priority:*` labels are optional public projections of the organization-only
+native Priority field. The native field wins if the two disagree.
+
+| Native Priority | Optional public projection |
+| --- | --- |
+| Urgent | `priority: critical` |
+| High | `priority: high` |
+| Medium | `priority: medium` |
+| Low | `priority: low` |
+
+Maintainers apply or correct these projections deliberately. Governance
+automation checks drift but does not mutate labels or native fields with a write
+token.
+
 ## Issue lifecycle
 
-Every issue starts with `status: needs-triage`. Triage confirms that the report
-is actionable, supported, safe to discuss publicly, and classified correctly.
+Issues opened through the provided forms start with `status: needs-triage`.
+Maintainers apply that status to issues created through another permitted path.
+Triage confirms that the report is actionable, supported, safe to discuss
+publicly, and classified correctly.
 
 - `status: needs-info` replaces the triage status while required information is
   outstanding.
@@ -27,13 +56,33 @@ is actionable, supported, safe to discuss publicly, and classified correctly.
 - `status: in-progress` means implementation or remediation is active.
 - `status: blocked` means a documented dependency or decision prevents progress.
 
-Use at most one status and one priority label. Maintainers assign priority only
-after validating impact and scope. `good first issue` and `help wanted` are
-applied only when acceptance criteria and contribution boundaries are clear.
+Use at most one public status and one public priority projection. Maintainers set
+the native Priority field only after validating impact and scope. `good first
+issue` and `help wanted` are applied only when acceptance criteria and
+contribution boundaries are clear.
 
 When closing work without implementation, use at most one of
 `resolution: duplicate`, `resolution: not-actionable`, or
 `resolution: not-planned` and explain the decision.
+
+## Solo-maintainer bootstrap
+
+Mirealo currently has one trusted maintainer. Repository rulesets still require
+pull requests, successful required checks, signed commits, linear history, and
+resolved review conversations. Required human approvals, code-owner review, and
+last-push approval remain at zero because there is no second person who can
+provide them.
+
+`CODEOWNERS` identifies accountability in this mode; it does not create
+independent review. A self-review, automated check, or tool-assisted review must
+not be described as independent human approval.
+
+When a second trusted maintainer receives appropriate repository access, the
+bootstrap ends. Before that maintainer participates in governance merges, the
+effective rulesets must require one approving review, code-owner review, and
+approval of the most recent push by someone other than its author. Ownership
+should then move from one personal account to a maintainer team containing the
+trusted reviewers.
 
 ## Pull requests
 
