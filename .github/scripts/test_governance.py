@@ -4,6 +4,7 @@ import contextlib
 import importlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -2377,6 +2378,201 @@ class LabelDriftTests(unittest.TestCase):
             RemoteLabel("bug", "D73A4A", "Defect."),
         )
         self.assertTrue(compare_labels(expected, actual).clean)
+
+
+class RetirementPreflightTests(unittest.TestCase):
+    def _sync_module(self):
+        try:
+            return importlib.import_module("sync_labels")
+        except ModuleNotFoundError:
+            self.fail("sync_labels CLI module is missing")
+
+    @staticmethod
+    def _retained_labels() -> tuple[
+        tuple[LabelDefinition, ...], tuple[RemoteLabel, ...]
+    ]:
+        expected = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        retained = tuple(
+            RemoteLabel(label.name, label.color, label.description)
+            for label in expected
+        )
+        return expected, retained
+
+    def test_frozen_inventory_and_repository_scope_are_exact(self) -> None:
+        sync_labels = self._sync_module()
+        self.assertEqual(sync_labels.RETIREMENT_REPOSITORY, "mirealo/.github")
+        self.assertEqual(
+            [
+                (label.name, label.color, label.description)
+                for label in sync_labels.OBSOLETE_LABELS_V1
+            ],
+            [
+                (
+                    "priority: critical",
+                    "b60205",
+                    "Public projection of native Priority Urgent; "
+                    "the native field is authoritative.",
+                ),
+                (
+                    "priority: high",
+                    "d93f0b",
+                    "Public projection of native Priority High; "
+                    "the native field is authoritative.",
+                ),
+                (
+                    "priority: medium",
+                    "fbca04",
+                    "Public projection of native Priority Medium; "
+                    "the native field is authoritative.",
+                ),
+                (
+                    "priority: low",
+                    "c5def5",
+                    "Public projection of native Priority Low; "
+                    "the native field is authoritative.",
+                ),
+                (
+                    "resolution: duplicate",
+                    "cfd3d7",
+                    "Closed because equivalent work is already tracked "
+                    "elsewhere.",
+                ),
+                (
+                    "resolution: not-actionable",
+                    "cfd3d7",
+                    "Closed because the report is incomplete, unsupported, "
+                    "or outside scope.",
+                ),
+                (
+                    "resolution: not-planned",
+                    "cfd3d7",
+                    "Closed because the requested work is not planned.",
+                ),
+            ],
+        )
+        self.assertEqual(
+            sync_labels.retirement_repository_target("mirealo/.github"),
+            "github.com/mirealo/.github",
+        )
+        with self.assertRaisesRegex(
+            GovernanceError,
+            "refusing an unapproved label retirement",
+        ):
+            sync_labels.retirement_repository_target("mirealo/example")
+
+    def test_inventory_is_bound_to_github_com_despite_inherited_host(self) -> None:
+        sync_labels = self._sync_module()
+        observed: list[tuple[list[str], str | None, object]] = []
+
+        def fake_run(command: list[str], **kwargs: object):
+            observed.append(
+                (command, os.environ.get("GH_HOST"), kwargs.get("env"))
+            )
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="[]",
+                stderr="",
+            )
+
+        with (
+            patch.dict(os.environ, {"GH_HOST": "example.invalid"}),
+            patch.object(sync_labels.subprocess, "run", side_effect=fake_run),
+        ):
+            self.assertEqual(
+                sync_labels.read_retirement_labels_v1("mirealo/.github"),
+                (),
+            )
+
+        self.assertEqual(
+            observed,
+            [
+                (
+                    [
+                        "gh",
+                        "label",
+                        "list",
+                        "--repo",
+                        "github.com/mirealo/.github",
+                        "--limit",
+                        "1000",
+                        "--json",
+                        "name,color,description",
+                    ],
+                    "example.invalid",
+                    None,
+                )
+            ],
+        )
+
+    def test_preflight_accepts_only_the_complete_frozen_inventory(self) -> None:
+        sync_labels = self._sync_module()
+        expected, retained = self._retained_labels()
+        present = sync_labels.validate_retirement_preflight_v1(
+            expected,
+            retained + sync_labels.OBSOLETE_LABELS_V1,
+        )
+        self.assertEqual(
+            present,
+            tuple(label.name for label in sync_labels.OBSOLETE_LABELS_V1),
+        )
+
+    def test_preflight_rejects_missing_drifted_or_ambiguous_inventory(
+        self,
+    ) -> None:
+        sync_labels = self._sync_module()
+        expected, retained = self._retained_labels()
+        frozen = sync_labels.OBSOLETE_LABELS_V1
+        changed = frozen[0]
+        fixtures = (
+            (
+                "missing frozen candidate",
+                retained + frozen[1:],
+                "missing frozen labels: priority: critical",
+            ),
+            (
+                "changed frozen definition",
+                retained
+                + (
+                    RemoteLabel(changed.name, "ffffff", changed.description),
+                )
+                + frozen[1:],
+                "no longer matches its historical definition",
+            ),
+            (
+                "unexpected label",
+                retained
+                + frozen
+                + (RemoteLabel("unexpected", "000000", "Unexpected."),),
+                "unexpected labels exist: unexpected",
+            ),
+            (
+                "case-insensitive duplicate",
+                retained
+                + frozen
+                + (RemoteLabel("BUG", "d73a4a", "Duplicate."),),
+                "duplicate names",
+            ),
+            (
+                "retained definition drift",
+                (
+                    RemoteLabel(
+                        retained[0].name,
+                        "ffffff",
+                        retained[0].description,
+                    ),
+                )
+                + retained[1:]
+                + frozen,
+                "all retained labels match the manifest",
+            ),
+        )
+        for name, remote, message in fixtures:
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(GovernanceError, message),
+            ):
+                sync_labels.validate_retirement_preflight_v1(expected, remote)
 
 
 class SyncCliContractTests(unittest.TestCase):
