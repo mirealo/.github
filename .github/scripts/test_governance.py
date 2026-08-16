@@ -2746,8 +2746,19 @@ class RetirementSafetyTests(unittest.TestCase):
                 )
         run_gh.assert_not_called()
 
-    def test_deletion_is_proof_gated_ordered_and_host_bound(self) -> None:
+    @staticmethod
+    def _retained_state():
+        expected = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        retained = tuple(
+            RemoteLabel(label.name, label.color, label.description)
+            for label in expected
+        )
+        return expected, retained
+
+    def test_next_deletion_is_state_proof_gated_and_host_bound(self) -> None:
         sync_labels = self._sync_module()
+        expected, retained = self._retained_state()
+        remaining = tuple(reversed(sync_labels.OBSOLETE_LABELS_V1[2:]))
         observed: list[tuple[list[str], str | None, object]] = []
 
         def fake_run(command: list[str], **kwargs: object):
@@ -2760,26 +2771,30 @@ class RetirementSafetyTests(unittest.TestCase):
             patch.dict(os.environ, {"GH_HOST": "example.invalid"}),
             patch.object(sync_labels.subprocess, "run", side_effect=fake_run),
         ):
-            sync_labels.delete_retirement_labels_v1(self._zero_proof(sync_labels))
+            deleted = sync_labels.delete_next_retirement_label_v1(
+                expected,
+                retained + remaining,
+                self._zero_proof(sync_labels),
+            )
 
+        self.assertEqual(deleted, sync_labels.OBSOLETE_LABELS_V1[2].name)
         self.assertEqual(
             [command for command, _host, _env in observed],
-            [
-                ["gh", *self._delete_command(label.name)]
-                for label in sync_labels.OBSOLETE_LABELS_V1
-            ],
+            [["gh", *self._delete_command(deleted)]],
         )
-        self.assertTrue(
-            all(host == "example.invalid" for _command, host, _env in observed)
-        )
-        self.assertTrue(all(env is None for _command, _host, env in observed))
+        self.assertEqual(observed[0][1:], ("example.invalid", None))
 
-    def test_deletion_rejects_incomplete_tampered_or_nonzero_proof(self) -> None:
+    def test_next_deletion_rejects_invalid_proof_or_current_state(self) -> None:
         sync_labels = self._sync_module()
+        expected, retained = self._retained_state()
         proof = self._zero_proof(sync_labels)
         results = proof.results
         invalid = (
             sync_labels.RetirementUsageProofV1(proof.repository, results[:-1]),
+            sync_labels.RetirementUsageProofV1(
+                proof.repository,
+                results[1:] + results[:1],
+            ),
             sync_labels.RetirementUsageProofV1(
                 proof.repository,
                 (
@@ -2789,6 +2804,11 @@ class RetirementSafetyTests(unittest.TestCase):
                         0,
                     ),
                 )
+                + results[1:],
+            ),
+            sync_labels.RetirementUsageProofV1(
+                proof.repository,
+                (sync_labels.LabelUsageV1(results[0].label, True, 0),)
                 + results[1:],
             ),
             sync_labels.RetirementUsageProofV1(
@@ -2808,27 +2828,59 @@ class RetirementSafetyTests(unittest.TestCase):
                         "complete zero-use proof",
                     ),
                 ):
-                    sync_labels.delete_retirement_labels_v1(candidate)
+                    sync_labels.delete_next_retirement_label_v1(
+                        expected,
+                        retained + sync_labels.OBSOLETE_LABELS_V1,
+                        candidate,
+                    )
+
+            changed = sync_labels.OBSOLETE_LABELS_V1[0]
+            incompatible_states = (
+                retained,
+                retained
+                + (
+                    RemoteLabel(
+                        changed.name,
+                        changed.color,
+                        "Repurposed label.",
+                    ),
+                ),
+                retained
+                + sync_labels.OBSOLETE_LABELS_V1
+                + (RemoteLabel("arbitrary", "000000", "Arbitrary."),),
+            )
+            for remote in incompatible_states:
+                with (
+                    self.subTest(remote=remote),
+                    self.assertRaises(GovernanceError),
+                ):
+                    sync_labels.delete_next_retirement_label_v1(
+                        expected,
+                        remote,
+                        proof,
+                    )
         run_gh.assert_not_called()
 
-    def test_deletion_stops_on_first_command_failure(self) -> None:
+    def test_next_deletion_propagates_its_single_command_failure(self) -> None:
         sync_labels = self._sync_module()
-        labels = sync_labels.OBSOLETE_LABELS_V1
+        expected, retained = self._retained_state()
+        next_label = sync_labels.OBSOLETE_LABELS_V1[0]
         with (
             patch.object(
                 sync_labels,
                 "run_gh",
-                side_effect=["", GovernanceError("delete failed")],
+                side_effect=GovernanceError("delete failed"),
             ) as run_gh,
             self.assertRaisesRegex(GovernanceError, "delete failed"),
         ):
-            sync_labels.delete_retirement_labels_v1(self._zero_proof(sync_labels))
+            sync_labels.delete_next_retirement_label_v1(
+                expected,
+                retained + sync_labels.OBSOLETE_LABELS_V1,
+                self._zero_proof(sync_labels),
+            )
         self.assertEqual(
             run_gh.call_args_list,
-            [
-                call(self._delete_command(labels[0].name)),
-                call(self._delete_command(labels[1].name)),
-            ],
+            [call(self._delete_command(next_label.name))],
         )
 
 

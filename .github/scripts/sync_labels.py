@@ -247,22 +247,6 @@ def _validate_retirement_usage_proof_v1(
     return proof.results
 
 
-def delete_retirement_labels_v1(proof: object) -> None:
-    results = _validate_retirement_usage_proof_v1(proof)
-    target = retirement_repository_target(RETIREMENT_REPOSITORY)
-    for result in results:
-        run_gh(
-            [
-                "label",
-                "delete",
-                result.label.name,
-                "--repo",
-                target,
-                "--yes",
-            ]
-        )
-
-
 def report(drift: LabelDrift) -> None:
     for label in drift.create:
         print(f"CREATE {label.name}")
@@ -354,6 +338,35 @@ def validate_retirement_state(
         for label in OBSOLETE_LABELS_V1
         if label.name in present_names
     )
+
+
+def delete_next_retirement_label_v1(
+    expected: tuple[LabelDefinition, ...],
+    current_remote: tuple[RemoteLabel, ...],
+    proof: object,
+) -> str:
+    results = _validate_retirement_usage_proof_v1(proof)
+    present = validate_retirement_state(expected, current_remote)
+    if not present:
+        raise GovernanceError("no frozen label remains to retire")
+
+    next_name = present[0]
+    proven_names = tuple(result.label.name for result in results)
+    if next_name not in proven_names:
+        raise GovernanceError(
+            "retirement state is incompatible with the zero-use proof"
+        )
+    run_gh(
+        [
+            "label",
+            "delete",
+            next_name,
+            "--repo",
+            retirement_repository_target(RETIREMENT_REPOSITORY),
+            "--yes",
+        ]
+    )
+    return next_name
 
 
 def validate_retirement_preflight_v1(
