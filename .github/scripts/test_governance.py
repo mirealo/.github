@@ -354,23 +354,29 @@ class PolicyStructureTests(unittest.TestCase):
         self.assertEqual(validate_linguist_attributes(ROOT), [])
         self.assertEqual(
             (ROOT / ".gitattributes").read_text(encoding="utf-8"),
-            ".github/scripts/*.py -linguist-documentation "
+            ".github/scripts/*.py -linguist-documentation -linguist-vendored "
             "linguist-detectable linguist-language=Python\n",
         )
 
+        expected_error = [
+            ".gitattributes: direct governance scripts must be classified "
+            "as detectable, non-vendored Python, not documentation"
+        ]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / ".gitattributes").write_text(
+            attributes = root / ".gitattributes"
+            attributes.write_text(
                 ".github/** linguist-language=Python\n",
                 encoding="utf-8",
             )
-            self.assertEqual(
-                validate_linguist_attributes(root),
-                [
-                    ".gitattributes: direct governance scripts must be "
-                    "classified as detectable Python, not documentation"
-                ],
+            self.assertEqual(validate_linguist_attributes(root), expected_error)
+
+            attributes.write_text(
+                ".github/scripts/*.py -linguist-documentation "
+                "linguist-detectable linguist-language=Python\n",
+                encoding="utf-8",
             )
+            self.assertEqual(validate_linguist_attributes(root), expected_error)
 
 
 class YamlAdapterTests(unittest.TestCase):

@@ -172,7 +172,7 @@ CONDUCT_EMAIL = "conduct@mirealo.com"
 CONDUCT_MAILTO = f"mailto:{CONDUCT_EMAIL}"
 LINGUIST_ATTRIBUTES_PATH = Path(".gitattributes")
 EXPECTED_LINGUIST_ATTRIBUTES = (
-    ".github/scripts/*.py -linguist-documentation "
+    ".github/scripts/*.py -linguist-documentation -linguist-vendored "
     "linguist-detectable linguist-language=Python\n"
 )
 REQUIRED_COMMUNITY_FILES = (
@@ -1505,7 +1505,7 @@ def validate_linguist_attributes(root: Path) -> list[str]:
     if text != EXPECTED_LINGUIST_ATTRIBUTES:
         return [
             ".gitattributes: direct governance scripts must be classified "
-            "as detectable Python, not documentation"
+            "as detectable, non-vendored Python, not documentation"
         ]
     return []
 
