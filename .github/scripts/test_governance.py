@@ -3453,6 +3453,86 @@ class SyncCliContractTests(unittest.TestCase):
             stdout.getvalue().endswith("Labels match the canonical manifest.\n")
         )
 
+    def test_retirement_flag_requires_apply_and_exact_repository(self) -> None:
+        sync_labels = self._sync_module()
+        invalid_arguments = (
+            [
+                "sync_labels.py",
+                "--repo",
+                "mirealo/.github",
+                "--retire-obsolete-v1",
+            ],
+            [
+                "sync_labels.py",
+                "--repo",
+                "mirealo/.github",
+                "--check",
+                "--retire-obsolete-v1",
+            ],
+            [
+                "sync_labels.py",
+                "--repo",
+                "mirealo/example",
+                "--apply",
+                "--retire-obsolete-v1",
+            ],
+        )
+        for argv in invalid_arguments:
+            with (
+                self.subTest(argv=argv),
+                patch.object(sys, "argv", argv),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                sync_labels.parse_arguments()
+            self.assertEqual(raised.exception.code, 2)
+
+    def test_retirement_cli_delegates_without_ordinary_label_writes(self) -> None:
+        sync_labels = self._sync_module()
+        expected = validate_label_manifest(ROOT / ".github" / "labels.yml")
+        retained = tuple(
+            RemoteLabel(label.name, label.color, label.description)
+            for label in expected
+        )
+        arguments = [
+            "sync_labels.py",
+            "--repo",
+            "mirealo/.github",
+            "--apply",
+            "--retire-obsolete-v1",
+        ]
+        for name, result_or_error, expected_exit in (
+            ("success", compare_labels(expected, retained), 0),
+            ("failure", GovernanceError("retirement failed"), 2),
+        ):
+            kwargs = (
+                {"side_effect": result_or_error}
+                if isinstance(result_or_error, BaseException)
+                else {"return_value": result_or_error}
+            )
+            with (
+                self.subTest(name=name),
+                patch.object(sys, "argv", arguments),
+                patch.object(
+                    sync_labels,
+                    "retire_obsolete_labels_v1",
+                    **kwargs,
+                ) as retire,
+                patch.object(sync_labels, "read_remote_labels") as ordinary_read,
+                patch.object(sync_labels, "create_label") as create_label,
+                patch.object(sync_labels, "update_label") as update_label,
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+            ):
+                result = sync_labels.main()
+            self.assertEqual(result, expected_exit)
+            retire.assert_called_once_with("mirealo/.github", expected)
+            ordinary_read.assert_not_called()
+            create_label.assert_not_called()
+            update_label.assert_not_called()
+            if expected_exit:
+                self.assertIn("retirement failed", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
