@@ -202,6 +202,7 @@ REQUIRED_POLICY_HEADINGS = {
         "## Solo-maintainer bootstrap",
         "## Ownership continuity",
         "## Break-glass changes",
+        "## CodeQL merge protection",
         "## Pull requests",
         "## Policy changes",
         "## Security and conduct",
@@ -245,6 +246,91 @@ REQUIRED_POLICY_HEADINGS = {
         "## Checklist",
     ),
 }
+GOVERNANCE_POLICY_REQUIREMENTS = (
+    (
+        "OrganizationAdmin pull-request-only recovery scope",
+        (
+            "permanent `organizationadmin` bypass capability",
+            "`pull_request` mode",
+            "cannot authorize a direct push",
+        ),
+    ),
+    (
+        "repository validation gates without bypass",
+        (
+            "`governance validation` and `codeql merge protection`",
+            "have no bypass actors",
+            "remain mandatory",
+        ),
+    ),
+    (
+        "last-resort recovery eligibility",
+        (
+            "last-resort recovery",
+            "convenience, urgency, or failed checks are never justification",
+        ),
+    ),
+    (
+        "durable incident record",
+        (
+            "within 24 hours",
+            "reason the normal path is unavailable",
+            "affected control",
+            "exact pull request, commit, and scope",
+            "supporting evidence and actor",
+            "utc start and end",
+            "intended operation",
+            "restoration proof",
+        ),
+    ),
+    (
+        "bounded per-incident authorization",
+        (
+            "permanently configured github actor",
+            "per-incident authorization expires",
+            "objective completion or after four hours",
+            "new documented authorization",
+        ),
+    ),
+    (
+        "post-incident recovery and review",
+        (
+            "immediately verify normal protections and required checks",
+            "rotate or revoke credentials",
+            "within two business days",
+            "review is self-review while mirealo has one owner",
+            "becomes independent when a second owner exists",
+        ),
+    ),
+    (
+        "repository-scoped CodeQL coverage",
+        (
+            "codeql default setup analyzes github actions and python",
+            "`check_sensitive_links.py`",
+            "`governance.py`",
+            "`sync_labels.py`",
+            "`test_governance.py`",
+            "`validate_governance.py`",
+            "applies to the default branch with no bypass actors",
+            "alert threshold is configured as `errors`",
+            "security-alert threshold as `medium_or_higher`",
+            "qualifying findings introduced or affected by an eligible "
+            "pull request",
+            "block merge only when every line identified by the alert exists "
+            "in that pull request's diff",
+            "does not apply this merge protection to merge queue groups",
+            "dependabot pull requests analyzed by default setup",
+            "does not claim organization-wide or private-repository coverage",
+            "paid entitlement",
+        ),
+    ),
+)
+FORBIDDEN_GOVERNANCE_POLICY_STATEMENTS = (
+    (
+        "false denial of the permanent recovery capability",
+        "mirealo does not maintain a permanent emergency bypass",
+    ),
+)
 EXPECTED_WORKFLOW_TRIGGERS = {
     "pull_request": None,
     "push": {"branches": ["main"]},
@@ -1472,6 +1558,21 @@ def _validate_policy_headings(texts: dict[Path, str]) -> list[str]:
     return errors
 
 
+def validate_governance_policy(text: str) -> list[str]:
+    normalized = " ".join(text.casefold().split())
+    errors = [
+        f"GOVERNANCE.md: missing policy control: {description}"
+        for description, fragments in GOVERNANCE_POLICY_REQUIREMENTS
+        if not all(fragment in normalized for fragment in fragments)
+    ]
+    errors.extend(
+        f"GOVERNANCE.md: prohibited policy statement: {description}"
+        for description, statement in FORBIDDEN_GOVERNANCE_POLICY_STATEMENTS
+        if statement in normalized
+    )
+    return errors
+
+
 def validate_community_files(root: Path) -> list[str]:
     errors: list[str] = []
     texts: dict[Path, str] = {}
@@ -1494,6 +1595,9 @@ def validate_community_files(root: Path) -> list[str]:
         errors.append(
             "CODE_OF_CONDUCT.md: confidential conduct contact is required"
         )
+    governance = texts.get(Path("GOVERNANCE.md"))
+    if governance is not None:
+        errors.extend(validate_governance_policy(governance))
     errors.extend(_validate_policy_headings(texts))
     return errors
 

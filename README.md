@@ -32,15 +32,18 @@ template directory.
 
 The [governance policy](GOVERNANCE.md) defines decision authority, triage,
 review, the honest single-maintainer bootstrap, and overrides. Native Issue Type
-and native issue fields are authoritative for issues. Native Priority and native
-close reasons replace priority and resolution labels. The canonical repository
-label data lives in [.github/labels.yml](.github/labels.yml); the governance
-policy defines its workflow, contribution, and pull-request roles.
+and native issue fields are authoritative for issues. The public native Priority
+field and native close reasons replace priority and resolution labels. The
+canonical repository label data lives in
+[.github/labels.yml](.github/labels.yml); the governance policy defines its
+workflow, contribution, and pull-request roles.
 
 `CODEOWNERS` is repository-local and is not inherited from this community-health
 repository. Every repository must provision its own ownership file. The
-governance policy also defines continuity and tightly bounded break-glass
-handling without publishing recovery material.
+governance policy also defines continuity and the permanent, pull-request-only
+`OrganizationAdmin` recovery capability without publishing recovery material.
+That capability cannot authorize direct pushes or bypass the repository's
+validation and CodeQL gates.
 
 Labels are repository-scoped. A repository that inherits these issue forms must
 also provision the referenced labels. Check a repository without making changes:
@@ -86,10 +89,16 @@ python3 .github/scripts/validate_governance.py
 The validator requires Python 3.11 or newer and a compatible `yq` command. It
 supports the local Python-`yq` interface and Go-`yq` v4 on GitHub-hosted runners.
 The root `.gitattributes` explicitly classifies direct governance scripts as
-detectable Python rather than documentation. Linguist applies that override
-only after it is committed; live CodeQL language coverage still requires an API
-readback after merge. Recheck the Languages API and retry default setup after
-merge. Advanced setup remains out of scope unless Python is still undetectable.
+detectable, non-vendored Python rather than documentation. CodeQL default setup
+now analyzes GitHub Actions and Python, and successful extraction covered all
+five operational scripts under `.github/scripts`. A repository ruleset with no
+bypass actors targets the default branch and is configured at `errors` and
+`medium_or_higher`. For eligible pull requests, qualifying findings block merge
+only when every affected line is present in the pull request diff. GitHub does
+not apply this protection to merge queue groups or Dependabot pull requests
+analyzed by default setup. These controls apply only to this public repository;
+they do not claim organization-wide or private-repository coverage, or any paid
+entitlement.
 
 The read-only Governance monitor runs weekly and on manual dispatch from `main`.
 It compares remote labels with the published manifest and checks a fixed,
