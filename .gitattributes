@@ -1,1 +1,1 @@
-.github/scripts/*.py -linguist-documentation linguist-detectable linguist-language=Python
+.github/scripts/*.py -linguist-documentation -linguist-vendored linguist-detectable linguist-language=Python
