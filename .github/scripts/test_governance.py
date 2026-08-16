@@ -25,6 +25,7 @@ from governance import (
     compare_labels,
     load_yaml,
     validate_community_files,
+    validate_governance_policy,
     validate_issue_forms,
     validate_label_manifest,
     validate_linguist_attributes,
@@ -334,7 +335,6 @@ class PolicyStructureTests(unittest.TestCase):
             "GitHub does not inherit `CODEOWNERS`",
             "at least two trusted organization owners",
             "at least two independent secure 2FA methods",
-            "Mirealo does not maintain a permanent emergency bypass.",
             "private security advisory",
         ):
             with self.subTest(statement=statement):
@@ -349,6 +349,94 @@ class PolicyStructureTests(unittest.TestCase):
         ):
             with self.subTest(statement=statement):
                 self.assertIn(statement, conduct)
+
+    def test_recovery_and_codeql_policy_controls_are_enforced(self) -> None:
+        governance = (ROOT / "GOVERNANCE.md").read_text(encoding="utf-8")
+        normalized_governance = " ".join(governance.split())
+        self.assertEqual(validate_governance_policy(governance), [])
+        codeql_policy_error = (
+            "GOVERNANCE.md: missing policy control: repository-scoped "
+            "CodeQL coverage"
+        )
+
+        cases = (
+            (
+                "former false bypass statement",
+                None,
+                " Mirealo does not maintain a permanent emergency bypass.",
+                "GOVERNANCE.md: prohibited policy statement: false denial "
+                "of the permanent recovery capability",
+            ),
+            (
+                "missing authorization expiry",
+                "objective completion or after four hours",
+                "an unspecified period",
+                "GOVERNANCE.md: missing policy control: bounded "
+                "per-incident authorization",
+            ),
+            (
+                "missing post-incident review deadline",
+                "post-incident review within two business days",
+                "post-incident review at an unspecified time",
+                "GOVERNANCE.md: missing policy control: post-incident "
+                "recovery and review",
+            ),
+            (
+                "missing CodeQL no-bypass scope",
+                "applies to the default branch with no bypass actors",
+                "applies to the default branch with unspecified bypass behavior",
+                codeql_policy_error,
+            ),
+            (
+                "missing CodeQL alert threshold",
+                "alert threshold is configured as `errors`",
+                "alert threshold is unspecified",
+                codeql_policy_error,
+            ),
+            (
+                "missing CodeQL security threshold",
+                "security-alert threshold as `medium_or_higher`",
+                "security-alert threshold is unspecified",
+                codeql_policy_error,
+            ),
+            (
+                "missing eligible pull-request scope",
+                "qualifying findings introduced or affected by an eligible "
+                "pull request",
+                "qualifying findings",
+                codeql_policy_error,
+            ),
+            (
+                "missing pull-request diff limitation",
+                "every line identified by the alert exists in that pull "
+                "request's diff",
+                "the alert is relevant to the pull request",
+                codeql_policy_error,
+            ),
+            (
+                "missing merge-queue limitation",
+                "does not apply this merge protection to merge queue groups",
+                "also applies to merge queue groups",
+                codeql_policy_error,
+            ),
+            (
+                "missing Dependabot limitation",
+                "Dependabot pull requests analyzed by default setup",
+                "automated pull requests",
+                codeql_policy_error,
+            ),
+        )
+        for case_name, old, new, expected_error in cases:
+            with self.subTest(case=case_name):
+                if old is None:
+                    mutated = normalized_governance + new
+                else:
+                    self.assertEqual(normalized_governance.count(old), 1)
+                    mutated = normalized_governance.replace(old, new, 1)
+                self.assertIn(
+                    expected_error,
+                    validate_governance_policy(mutated),
+                )
 
     def test_linguist_override_is_minimal_and_exact(self) -> None:
         self.assertEqual(validate_linguist_attributes(ROOT), [])

@@ -99,18 +99,52 @@ roles and verified access, never personal authentication material.
 
 ## Break-glass changes
 
-Normal pull requests remain the preferred path. Break-glass changes are limited
-to incident containment, recovery of organization control, or repair of broken
-merge controls. They must use the smallest separately authorized settings or
-repository change for the shortest practical period. Mirealo does not maintain
-a permanent emergency bypass.
+The organization default-branch ruleset retains a permanent
+`OrganizationAdmin` bypass capability in `pull_request` mode. It may permit a
+merge through a pull request, but it cannot authorize a direct push to the
+default branch. The separate repository rulesets `Governance validation` and
+`CodeQL merge protection` have no bypass actors, so their required validation
+and CodeQL gates remain mandatory, including during recovery.
 
-Record the timestamp, reason, exact settings before and after, signed change,
-tests, and restoration evidence in the appropriate audit trail. Restore normal
-rules before ordinary work resumes. Put vulnerability details, credentials, or
-other sensitive incident facts in a private security advisory rather than a
-public issue or pull request. A solo-owner emergency action is not independent
-review.
+The permanently configured GitHub actor is a standing technical capability, not
+per-incident authorization. Its use is last-resort recovery limited to incident
+containment, recovery of organization control, or repair of broken merge
+controls. Convenience, urgency, or failed checks are never justification. Each
+per-incident authorization expires at objective completion or after four hours,
+whichever comes first. An extension requires a new documented authorization.
+
+Create a durable incident record appropriate to its sensitivity before use. If
+an account or access failure makes prior recording impossible, create it within
+24 hours after access is recovered. The record must include:
+
+- the reason the normal path is unavailable and the affected control;
+- the exact pull request, commit, and scope, plus supporting evidence and actor;
+- the UTC start and end, intended operation, and restoration proof.
+
+Use the smallest authorized operation for the shortest practical period. Put
+vulnerability details, credentials, or other sensitive incident facts in a
+private security advisory rather than a public issue or pull request.
+Immediately verify normal protections and required checks after use, and rotate
+or revoke credentials if compromise is plausible. Complete a documented
+post-incident review within two business days. That review is self-review while
+Mirealo has one owner and becomes independent when a second owner exists.
+
+## CodeQL merge protection
+
+This public repository's CodeQL default setup analyzes GitHub Actions and
+Python. Successful extraction covered all five operational Python scripts:
+`check_sensitive_links.py`, `governance.py`, `sync_labels.py`,
+`test_governance.py`, and `validate_governance.py`.
+
+The repository ruleset `CodeQL merge protection` applies to the default branch
+with no bypass actors. Its alert threshold is configured as `errors`, and its
+security-alert threshold as `medium_or_higher`. Under GitHub's documented
+semantics, qualifying findings introduced or affected by an eligible pull
+request block merge only when every line identified by the alert exists in that
+pull request's diff. GitHub does not apply this merge protection to merge queue
+groups or Dependabot pull requests analyzed by default setup. This
+repository-scoped evidence does not claim organization-wide or
+private-repository coverage, or any paid entitlement.
 
 ## Pull requests
 
