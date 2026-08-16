@@ -22,6 +22,45 @@ REPOSITORY_PATTERN = re.compile(
     r"[A-Za-z0-9._-]{1,100}$"
 )
 REMOTE_LABEL_LIMIT = 1000
+GITHUB_HOSTNAME = "github.com"
+RETIREMENT_REPOSITORY = "mirealo/.github"
+OBSOLETE_LABELS_V1 = (
+    RemoteLabel(
+        "priority: critical",
+        "b60205",
+        "Public projection of native Priority Urgent; the native field is authoritative.",
+    ),
+    RemoteLabel(
+        "priority: high",
+        "d93f0b",
+        "Public projection of native Priority High; the native field is authoritative.",
+    ),
+    RemoteLabel(
+        "priority: medium",
+        "fbca04",
+        "Public projection of native Priority Medium; the native field is authoritative.",
+    ),
+    RemoteLabel(
+        "priority: low",
+        "c5def5",
+        "Public projection of native Priority Low; the native field is authoritative.",
+    ),
+    RemoteLabel(
+        "resolution: duplicate",
+        "cfd3d7",
+        "Closed because equivalent work is already tracked elsewhere.",
+    ),
+    RemoteLabel(
+        "resolution: not-actionable",
+        "cfd3d7",
+        "Closed because the report is incomplete, unsupported, or outside scope.",
+    ),
+    RemoteLabel(
+        "resolution: not-planned",
+        "cfd3d7",
+        "Closed because the requested work is not planned.",
+    ),
+)
 
 
 def repository_name(value: str) -> str:
@@ -86,6 +125,16 @@ def read_remote_labels(repository: str) -> tuple[RemoteLabel, ...]:
     return tuple(labels)
 
 
+def retirement_repository_target(repository: str) -> str:
+    if repository != RETIREMENT_REPOSITORY:
+        raise GovernanceError("refusing an unapproved label retirement")
+    return f"{GITHUB_HOSTNAME}/{repository}"
+
+
+def read_retirement_labels_v1(repository: str) -> tuple[RemoteLabel, ...]:
+    return read_remote_labels(retirement_repository_target(repository))
+
+
 def report(drift: LabelDrift) -> None:
     for label in drift.create:
         print(f"CREATE {label.name}")
@@ -131,6 +180,68 @@ def update_label(repository: str, label: LabelDefinition) -> None:
             label.description,
         ]
     )
+
+
+def validate_retirement_state(
+    expected: tuple[LabelDefinition, ...],
+    remote: tuple[RemoteLabel, ...],
+) -> tuple[str, ...]:
+    if len(remote) >= REMOTE_LABEL_LIMIT:
+        raise GovernanceError(
+            "remote label inventory may be truncated; refusing retirement"
+        )
+    remote_names = [label.name for label in remote]
+    if len(remote_names) != len({name.casefold() for name in remote_names}):
+        raise GovernanceError("remote labels contain duplicate names")
+
+    drift = compare_labels(expected, remote)
+    if drift.create or drift.update:
+        raise GovernanceError(
+            "refusing retirement until all retained labels match the manifest"
+        )
+
+    frozen_by_name = {label.name: label for label in OBSOLETE_LABELS_V1}
+    unexpected = [
+        label.name for label in drift.extra if label.name not in frozen_by_name
+    ]
+    if unexpected:
+        raise GovernanceError(
+            "refusing retirement while unexpected labels exist: "
+            + ", ".join(sorted(unexpected))
+        )
+
+    for actual in drift.extra:
+        frozen = frozen_by_name[actual.name]
+        if (
+            actual.color.lower() != frozen.color
+            or actual.description != frozen.description
+        ):
+            raise GovernanceError(
+                f"refusing retirement because {actual.name!r} no longer "
+                "matches its historical definition"
+            )
+    present_names = {label.name for label in drift.extra}
+    return tuple(
+        label.name
+        for label in OBSOLETE_LABELS_V1
+        if label.name in present_names
+    )
+
+
+def validate_retirement_preflight_v1(
+    expected: tuple[LabelDefinition, ...],
+    remote: tuple[RemoteLabel, ...],
+) -> tuple[str, ...]:
+    present = validate_retirement_state(expected, remote)
+    missing = [
+        label.name for label in OBSOLETE_LABELS_V1 if label.name not in present
+    ]
+    if missing:
+        raise GovernanceError(
+            "retirement preflight is missing frozen labels: "
+            + ", ".join(missing)
+        )
+    return present
 
 
 def parse_arguments() -> argparse.Namespace:
